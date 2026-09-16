@@ -21,7 +21,7 @@ typealias BlockListItem = ListItem
 
 // MARK: - Block
 
-enum Block: Identifiable, Hashable {
+enum Block: Identifiable, Hashable, Codable {
     case paragraph(id: BlockID, text: String)
     case heading(id: BlockID, level: Int, text: String)
     case bulletList(id: BlockID, items: [ListItem])
@@ -31,6 +31,109 @@ enum Block: Identifiable, Hashable {
     case divider(id: BlockID)
     case figure(id: BlockID, imageURL: URL?, caption: String)
     case link(id: BlockID, text: String, url: URL)
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case id
+        case text
+        case level
+        case items
+        case imageURL
+        case caption
+        case url
+    }
+
+    private enum Kind: String, Codable {
+        case paragraph
+        case heading
+        case bulletList
+        case numberedList
+        case quote
+        case code
+        case divider
+        case figure
+        case link
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(Kind.self, forKey: .type)
+        let id = try container.decode(BlockID.self, forKey: .id)
+        switch kind {
+        case .paragraph:
+            self = .paragraph(id: id, text: try container.decode(String.self, forKey: .text))
+        case .heading:
+            self = .heading(
+                id: id,
+                level: try container.decode(Int.self, forKey: .level),
+                text: try container.decode(String.self, forKey: .text)
+            )
+        case .bulletList:
+            self = .bulletList(
+                id: id,
+                items: try container.decodeIfPresent([ListItem].self, forKey: .items) ?? []
+            )
+        case .numberedList:
+            self = .numberedList(
+                id: id,
+                items: try container.decodeIfPresent([ListItem].self, forKey: .items) ?? []
+            )
+        case .quote:
+            self = .quote(id: id, text: try container.decode(String.self, forKey: .text))
+        case .code:
+            self = .code(id: id, text: try container.decode(String.self, forKey: .text))
+        case .divider:
+            self = .divider(id: id)
+        case .figure:
+            self = .figure(
+                id: id,
+                imageURL: try container.decodeIfPresent(URL.self, forKey: .imageURL),
+                caption: try container.decodeIfPresent(String.self, forKey: .caption) ?? ""
+            )
+        case .link:
+            self = .link(
+                id: id,
+                text: try container.decode(String.self, forKey: .text),
+                url: try container.decode(URL.self, forKey: .url)
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        switch self {
+        case let .paragraph(_, text):
+            try container.encode(Kind.paragraph, forKey: .type)
+            try container.encode(text, forKey: .text)
+        case let .heading(_, level, text):
+            try container.encode(Kind.heading, forKey: .type)
+            try container.encode(level, forKey: .level)
+            try container.encode(text, forKey: .text)
+        case let .bulletList(_, items):
+            try container.encode(Kind.bulletList, forKey: .type)
+            try container.encode(items, forKey: .items)
+        case let .numberedList(_, items):
+            try container.encode(Kind.numberedList, forKey: .type)
+            try container.encode(items, forKey: .items)
+        case let .quote(_, text):
+            try container.encode(Kind.quote, forKey: .type)
+            try container.encode(text, forKey: .text)
+        case let .code(_, text):
+            try container.encode(Kind.code, forKey: .type)
+            try container.encode(text, forKey: .text)
+        case .divider:
+            try container.encode(Kind.divider, forKey: .type)
+        case let .figure(_, imageURL, caption):
+            try container.encode(Kind.figure, forKey: .type)
+            try container.encodeIfPresent(imageURL, forKey: .imageURL)
+            try container.encode(caption, forKey: .caption)
+        case let .link(_, text, url):
+            try container.encode(Kind.link, forKey: .type)
+            try container.encode(text, forKey: .text)
+            try container.encode(url, forKey: .url)
+        }
+    }
 
     var id: BlockID {
         switch self {

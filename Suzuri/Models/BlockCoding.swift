@@ -8,7 +8,7 @@ struct BlockEncoder {
     static let contentLimit = maxContentBytes
 
     static func encode(_ blocks: [Block]) -> [TelegraphNode] {
-        blocks.compactMap(encode(_:))
+        blocks.map(toNode)
     }
 
     static func encode(blocks: [Block]) -> [TelegraphNode] {
@@ -20,14 +20,22 @@ struct BlockEncoder {
     }
 
     static func toNodes(_ block: Block) -> [TelegraphNode] {
-        encode(block).map { [$0] } ?? []
+        [toNode(block)]
     }
 
     static func toNodes(blocks: [Block]) -> [TelegraphNode] {
         encode(blocks)
     }
 
+    static func toNodes(from blocks: [Block]) -> [TelegraphNode] {
+        encode(blocks)
+    }
+
     static func encode(_ block: Block) -> TelegraphNode? {
+        toNode(block)
+    }
+
+    static func toNode(_ block: Block) -> TelegraphNode {
         switch block {
         case let .paragraph(_, text):
             node(tag: "p", children: [.text(text)])
@@ -223,7 +231,7 @@ struct BlockDecoder {
     }
 
     private static func figure(fromImage node: TelegraphNode) -> Block {
-        let source = node.attrs?["src"].flatMap(URL.init(string:))
+        let source = node.attrs?["src"].flatMap { URL(string: $0) }
         return .figure(id: UUID(), imageURL: source, caption: "")
     }
 
