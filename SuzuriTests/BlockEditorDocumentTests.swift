@@ -54,6 +54,14 @@ final class BlockEditorDocumentTests: XCTestCase {
         XCTAssertEqual(document.blocks.map(\.textContent), ["0", "2"])
     }
 
+    func testRemoveBlocksAllRestoresEmptyParagraph() {
+        let blocks = (0..<3).map { Block.paragraph(id: UUID(), text: "\($0)") }
+        let document = BlockEditorDocument(blocks: blocks)
+        XCTAssertEqual(document.removeBlocks(ids: Set(blocks.map(\.id))), 0)
+        XCTAssertEqual(document.blocks.count, 1)
+        XCTAssertTrue(document.blocks[0].isEmpty)
+    }
+
     func testReplaceBlock() {
         let id = UUID()
         let document = BlockEditorDocument(blocks: [.paragraph(id: id, text: "old")])
@@ -120,6 +128,28 @@ final class BlockEditorDocumentTests: XCTestCase {
         XCTAssertEqual(document.blocks, [divider])
     }
 
+    func testSplitBlockClampsNegativeAndOverlongOffsets() throws {
+        let negativeID = UUID()
+        let negativeDocument = BlockEditorDocument(
+            blocks: [.paragraph(id: negativeID, text: "abc")]
+        )
+        let negativeSplitID = try XCTUnwrap(
+            negativeDocument.splitBlock(id: negativeID, atOffset: -1)
+        )
+        XCTAssertEqual(negativeDocument.blocks[0].textContent, "")
+        XCTAssertEqual(negativeDocument.block(for: negativeSplitID)?.textContent, "abc")
+
+        let overlongID = UUID()
+        let overlongDocument = BlockEditorDocument(
+            blocks: [.paragraph(id: overlongID, text: "abc")]
+        )
+        let overlongSplitID = try XCTUnwrap(
+            overlongDocument.splitBlock(id: overlongID, atOffset: 100)
+        )
+        XCTAssertEqual(overlongDocument.blocks[0].textContent, "abc")
+        XCTAssertEqual(overlongDocument.block(for: overlongSplitID)?.textContent, "")
+    }
+
     func testMergeWithPreviousReturnsCursorOffset() {
         let firstID = UUID()
         let secondID = UUID()
@@ -140,6 +170,37 @@ final class BlockEditorDocumentTests: XCTestCase {
         XCTAssertNil(document.mergeWithPrevious(id: first.id))
         XCTAssertNil(document.mergeWithPrevious(id: second.id))
         XCTAssertEqual(document.blocks.count, 2)
+    }
+
+    func testMergeWithNextAppendsTextAndRemovesNextBlock() {
+        let firstID = UUID()
+        let secondID = UUID()
+        let document = BlockEditorDocument(blocks: [
+            .paragraph(id: firstID, text: "abc"),
+            .paragraph(id: secondID, text: "def")
+        ])
+
+        XCTAssertTrue(document.mergeWithNext(id: firstID))
+        XCTAssertEqual(document.blocks.count, 1)
+        XCTAssertEqual(document.blocks[0], .paragraph(id: firstID, text: "abcdef"))
+        XCTAssertNil(document.block(for: secondID))
+    }
+
+    func testMergeWithNextReturnsFalseWhenThereIsNoNextBlock() {
+        let first = Block.paragraph(id: UUID(), text: "only")
+        let document = BlockEditorDocument(blocks: [first])
+
+        XCTAssertFalse(document.mergeWithNext(id: first.id))
+        XCTAssertEqual(document.blocks, [first])
+    }
+
+    func testMergeWithNextRejectsNonTextNextBlock() {
+        let first = Block.paragraph(id: UUID(), text: "text")
+        let next = Block.newDivider()
+        let document = BlockEditorDocument(blocks: [first, next])
+
+        XCTAssertFalse(document.mergeWithNext(id: first.id))
+        XCTAssertEqual(document.blocks, [first, next])
     }
 
     func testAddListItemAppendsOrInsertsAfterItem() throws {

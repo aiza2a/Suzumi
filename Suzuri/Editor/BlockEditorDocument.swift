@@ -152,6 +152,22 @@ final class BlockEditorDocument {
         return (previousBlockID, cursorOffset)
     }
 
+    /// Merges the next text block into the current block.
+    @discardableResult
+    func mergeWithNext(id blockID: BlockID) -> Bool {
+        guard let index = index(of: blockID),
+              index + 1 < blocks.count,
+              let currentText = blocks[index].textContent,
+              let nextText = blocks[index + 1].textContent
+        else { return false }
+
+        var current = blocks[index]
+        current.textContent = currentText + nextText
+        blocks[index] = current
+        blocks.remove(at: index + 1)
+        return true
+    }
+
     // MARK: - List Items
 
     func addListItem(to blockID: BlockID, after itemID: UUID?) {

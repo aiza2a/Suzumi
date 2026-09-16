@@ -73,6 +73,35 @@ final class BlockTests: XCTestCase {
         XCTAssertEqual(linkURL, url)
     }
 
+    func testTextContentSetterPreservesIDForParagraphQuoteAndCode() {
+        let paragraphID = UUID()
+        var paragraph = Block.paragraph(id: paragraphID, text: "old paragraph")
+        paragraph.textContent = "new paragraph"
+        guard case let .paragraph(updatedParagraphID, paragraphText) = paragraph else {
+            return XCTFail("Expected paragraph")
+        }
+        XCTAssertEqual(updatedParagraphID, paragraphID)
+        XCTAssertEqual(paragraphText, "new paragraph")
+
+        let quoteID = UUID()
+        var quote = Block.quote(id: quoteID, text: "old quote")
+        quote.textContent = "new quote"
+        guard case let .quote(updatedQuoteID, quoteText) = quote else {
+            return XCTFail("Expected quote")
+        }
+        XCTAssertEqual(updatedQuoteID, quoteID)
+        XCTAssertEqual(quoteText, "new quote")
+
+        let codeID = UUID()
+        var code = Block.code(id: codeID, text: "old code")
+        code.textContent = "new code"
+        guard case let .code(updatedCodeID, codeText) = code else {
+            return XCTFail("Expected code")
+        }
+        XCTAssertEqual(updatedCodeID, codeID)
+        XCTAssertEqual(codeText, "new code")
+    }
+
     func testNonTextContentSetterDoesNothing() {
         let original = Block.newDivider()
         var changed = original
@@ -119,6 +148,36 @@ final class BlockTests: XCTestCase {
         XCTAssertEqual(text, "kept")
         XCTAssertEqual(BlockType.paragraph, .text)
         _ = try XCTUnwrap(BlockType.codeBlock.makeEmptyBlock().textContent)
+    }
+
+    func testBlockTypeMakeEmptyCreatesEveryConcreteBlockKind() {
+        guard case .paragraph = BlockType.text.makeEmpty else {
+            return XCTFail("Expected paragraph")
+        }
+        guard case .heading = BlockType.heading.makeEmpty else {
+            return XCTFail("Expected heading")
+        }
+        guard case .quote = BlockType.quote.makeEmpty else {
+            return XCTFail("Expected quote")
+        }
+        guard case .bulletList = BlockType.bulletList.makeEmpty else {
+            return XCTFail("Expected bullet list")
+        }
+        guard case .numberedList = BlockType.numberedList.makeEmpty else {
+            return XCTFail("Expected numbered list")
+        }
+        guard case .code = BlockType.code.makeEmpty else {
+            return XCTFail("Expected code")
+        }
+        guard case .divider = BlockType.divider.makeEmpty else {
+            return XCTFail("Expected divider")
+        }
+        guard case .figure = BlockType.figure.makeEmpty else {
+            return XCTFail("Expected figure")
+        }
+        guard case .link = BlockType.link.makeEmpty else {
+            return XCTFail("Expected link")
+        }
     }
 
     private var exampleURL: URL {

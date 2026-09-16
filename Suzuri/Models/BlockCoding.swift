@@ -147,6 +147,8 @@ struct BlockEncoder {
     }
 }
 
+/// Telegraph nodes do not carry editor block IDs. Decoding intentionally creates new UUIDs,
+/// so reloading a node tree rebuilds editor identity rather than attempting to preserve it.
 struct BlockDecoder {
     static func decode(_ nodes: [TelegraphNode]) -> [Block] {
         nodes.compactMap(decode(_:))
