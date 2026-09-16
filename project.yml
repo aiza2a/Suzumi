@@ -1,0 +1,33 @@
+name: Suzuri
+options:
+  bundleIdPrefix: com.suzuri
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+targets:
+  Suzuri:
+    type: application
+    platform: iOS
+    sources: [Suzuri]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.suzuri.app
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait"
+        CODE_SIGNING_ALLOWED: NO
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 0.1.0
+        SWIFT_VERSION: "5.9"
+  SuzuriTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [SuzuriTests]
+    dependencies:
+      - target: Suzuri
+schemes:
+  Suzuri:
+    build:
+      targets: {Suzuri: all}
+    test:
+      targets: [SuzuriTests]
