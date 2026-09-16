@@ -1,0 +1,17 @@
+# Xcode
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+
+# Build
+build/
+*.ipa
+*.dSYM.zip
+
+# macOS
+.DS_Store
+
+# SwiftPM
+.swiftpm/
+Package.resolved

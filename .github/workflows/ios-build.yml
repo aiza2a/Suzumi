@@ -1,0 +1,31 @@
+name: iOS Build
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate
+        run: xcodegen generate
+      - name: Build (no signing)
+        run: |
+          xcodebuild -project Suzuri.xcodeproj -scheme Suzuri \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO build
+      - name: Test
+        run: |
+          xcodebuild -project Suzuri.xcodeproj -scheme Suzuri \
+            -destination 'platform=iOS Simulator,name=iPhone 15' test
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Suzuri.app
+          path: build/Release-iphoneos/Suzuri.app
