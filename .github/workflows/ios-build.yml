@@ -19,11 +19,13 @@ jobs:
         run: |
           xcodebuild -project Suzuri.xcodeproj -scheme Suzuri \
             -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO build
       - name: Test
         run: |
           xcodebuild -project Suzuri.xcodeproj -scheme Suzuri \
-            -destination 'platform=iOS Simulator,name=iPhone 15' test
+            -destination 'platform=iOS Simulator,name=iPhone 15' \
+            -derivedDataPath build test
       - name: Upload app
         uses: actions/upload-artifact@v4
         with:
