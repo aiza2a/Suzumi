@@ -31,6 +31,24 @@ final class EnvelopeTests: XCTestCase {
         XCTAssertNil(env.error)
     }
 
+    /// ok=true + warning error is retained while the result remains usable.
+    func testOkTrueWithErrorRetainsBothFields() throws {
+        let env = try decode(#"{"ok":true,"error":"WARNING","result":{"short_name":"u"}}"#)
+
+        XCTAssertTrue(env.ok)
+        XCTAssertEqual(env.error, "WARNING")
+        XCTAssertEqual(env.result?.shortName, "u")
+    }
+
+    /// A result on a failed envelope is ignored rather than exposed as success data.
+    func testOkFalseWithResultIgnoresResult() throws {
+        let env = try decode(#"{"ok":false,"error":"FAILED","result":{"short_name":"stale"}}"#)
+
+        XCTAssertFalse(env.ok)
+        XCTAssertEqual(env.error, "FAILED")
+        XCTAssertNil(env.result)
+    }
+
     /// Account 的 snake_case 字段能被 Envelope 正确映射
     func testAccountSnakeCaseMapping() throws {
         let env = try decode(#"{"ok":true,"result":{"short_name":"sn","author_name":"an","access_token":"tk","page_count":3}}"#)
