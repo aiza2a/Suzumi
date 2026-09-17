@@ -6,6 +6,7 @@ import UIKit
 struct BlockRowView: View {
     let block: Block
     @Environment(BlockEditorDocument.self) private var document
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var isBlockSelected = false
     var isMultiSelectionActive = false
@@ -41,8 +42,8 @@ struct BlockRowView: View {
             radius: isFocused ? 10 : 0,
             y: isFocused ? 4 : 0
         )
-        .animation(AppAnimation.blockFocus, value: isFocused)
-        .animation(AppAnimation.blockFocus, value: isBlockSelected)
+        .animation(reduceMotion ? nil : AppAnimation.blockFocus, value: isFocused)
+        .animation(reduceMotion ? nil : AppAnimation.blockFocus, value: isBlockSelected)
         .onTapGesture {
             if !isMultiSelectionActive, !block.isListBlock {
                 focusRow()
@@ -67,8 +68,8 @@ struct BlockRowView: View {
     private var focusOverlay: some View {
         RoundedRectangle(cornerRadius: 14, style: .continuous)
             .stroke(
-                Color.brand600.opacity(isFocused ? 0.55 : 0),
-                lineWidth: 1.2
+                Color.brand600.opacity(isFocused ? 0.55 : (isBlockSelected ? 0.4 : 0)),
+                lineWidth: isFocused ? 1.2 : (isBlockSelected ? 1.0 : 1.0)
             )
             .allowsHitTesting(false)
     }
@@ -81,7 +82,7 @@ struct BlockRowView: View {
         .frame(width: Self.gutterWidth, alignment: .trailing)
         .padding(.trailing, 4)
         .opacity(isFocused ? 1 : 0)
-        .animation(.easeInOut(duration: 0.15), value: isFocused)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isFocused)
         .allowsHitTesting(isFocused)
         .accessibilityHidden(!isFocused)
     }

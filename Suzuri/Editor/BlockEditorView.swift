@@ -5,6 +5,7 @@ import UIKit
 @MainActor
 struct BlockEditorView: View {
     @Environment(BlockEditorDocument.self) private var document
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var multiSelection = MultiBlockSelection()
     @State private var focusedListItemID: UUID?
@@ -70,8 +71,8 @@ struct BlockEditorView: View {
                 .zIndex(1)
             }
         }
-        .animation(AppAnimation.listInsert, value: document.blocks.count)
-        .animation(AppAnimation.pop, value: multiSelection.isActive)
+        .animation(reduceMotion ? nil : AppAnimation.listInsert, value: document.blocks.count)
+        .animation(reduceMotion ? nil : AppAnimation.pop, value: multiSelection.isActive)
         .onChange(of: multiSelection.isActive) { _, isActive in
             if isActive {
                 isTextSelectionToolbarVisible = false
@@ -95,12 +96,14 @@ struct BlockEditorView: View {
                     direction: .up
                 )
             }
+            .disabled(!isSelectionContiguous)
             selectionButton("下移", systemImage: "chevron.down") {
                 document.moveSelectedBlocks(
                     multiSelection.selectedBlockIDs,
                     direction: .down
                 )
             }
+            .disabled(!isSelectionContiguous)
             Divider()
                 .frame(height: 20)
             Button("完成") {
@@ -112,6 +115,7 @@ struct BlockEditorView: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(Color.brand600)
             .buttonStyle(.plain)
+            .keyboardShortcut(.escape)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -135,6 +139,17 @@ struct BlockEditorView: View {
         .buttonStyle(.plain)
         .foregroundStyle(role == .destructive ? Color.red : Color.brand600)
         .accessibilityLabel(title)
+    }
+
+    private var isSelectionContiguous: Bool {
+        let selectedIndices = document.blocks.indices.filter {
+            multiSelection.selectedBlockIDs.contains(document.blocks[$0].id)
+        }
+        guard let first = selectedIndices.first,
+              let last = selectedIndices.last,
+              selectedIndices.count == multiSelection.selectedBlockIDs.count
+        else { return false }
+        return last - first + 1 == selectedIndices.count
     }
 
     private func handleTap(on blockID: BlockID) {
