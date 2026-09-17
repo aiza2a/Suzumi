@@ -1,11 +1,10 @@
 import SwiftUI
 
-/// 应用根视图入口。
+/// 应用根视图入口：启动时显示文章列表。
 ///
-/// D1 阶段此处为发布 Debug 界面；D4 起视觉系统就绪后委托 `EditorScreen`。
-/// 保留此类型作为 `SuzuriApp` 的入口点，便于后续接入 Tab 路由。
+/// 新建按钮与文章编辑流程由 `PageListView` 继续进入 `EditorScreen`。
 struct RootView: View {
     var body: some View {
-        EditorScreen()
+        PageListView()
     }
 }
