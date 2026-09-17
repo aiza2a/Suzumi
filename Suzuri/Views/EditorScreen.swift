@@ -141,16 +141,14 @@ struct EditorScreen: View {
         }
 
         do {
-            let blocks = document.blocks
-            _ = try BlockEncoder.encodedData(for: blocks)
-            let nodes = BlockEncoder.nodesForPublishing(blocks)
+            let nodes = BlockEncoder.nodesForPublishing(document.blocks)
             let contentData: Data
             do {
                 contentData = try JSONEncoder().encode(nodes)
             } catch {
                 throw TelegraphError.invalidResponse
             }
-            if contentData.count > BlockEncoder.maxContentBytes {
+            guard contentData.count <= BlockEncoder.maxContentBytes else {
                 throw TelegraphError.contentTooLarge(bytes: contentData.count)
             }
 

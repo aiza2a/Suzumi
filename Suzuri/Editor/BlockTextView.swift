@@ -136,6 +136,7 @@ struct BlockTextView: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
+            isEditing = true
             notifySelectionChange(for: textView)
         }
 
@@ -199,7 +200,6 @@ struct BlockTextView: UIViewRepresentable {
             isEditing = true
             text = textView.text
             blockTextView.invalidateIntrinsicContentSize()
-            isEditing = false
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {

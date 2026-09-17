@@ -190,8 +190,7 @@ struct BlockRowView: View {
             font: headingFont(for: level),
             placeholder: "标题",
             onEnter: { offset in
-                let currentText = document.block(for: id)?.textContent ?? ""
-                if currentText.isEmpty {
+                if document.block(for: id)?.isEmpty ?? true {
                     document.replaceBlock(id: id, with: .paragraph(id: id, text: ""))
                     focusBlock(id: id, cursorAtEnd: false)
                 } else {
@@ -199,8 +198,7 @@ struct BlockRowView: View {
                 }
             },
             onBackspaceAtStart: {
-                let currentText = document.block(for: id)?.textContent ?? ""
-                if currentText.isEmpty {
+                if document.block(for: id)?.isEmpty ?? true {
                     document.replaceBlock(id: id, with: .paragraph(id: id, text: ""))
                     focusBlock(id: id, cursorAtEnd: false)
                 } else {
@@ -346,6 +344,10 @@ struct BlockRowView: View {
                         items: items
                     )
                 },
+                // TODO: V2 list item indent via Tab
+                onTab: nil,
+                onBackTab: nil,
+                onSlashAtStart: nil,
                 onDeleteForwardAtEnd: {
                     mergeNextListItem(
                         blockID: blockID,
@@ -457,6 +459,9 @@ struct BlockRowView: View {
         onBackspaceAtStart: (() -> Void)? = nil,
         onArrowUp: ((CGFloat) -> Void)? = nil,
         onArrowDown: ((CGFloat) -> Void)? = nil,
+        onTab: (() -> Void)? = nil,
+        onBackTab: (() -> Void)? = nil,
+        onSlashAtStart: (() -> Void)? = nil,
         onDeleteForwardAtEnd: (() -> Void)? = nil
     ) -> some View {
         BlockTextView(
@@ -469,6 +474,9 @@ struct BlockRowView: View {
             onBackspaceAtStart: onBackspaceAtStart,
             onArrowUp: onArrowUp,
             onArrowDown: onArrowDown,
+            onTab: onTab,
+            onBackTab: onBackTab,
+            onSlashAtStart: onSlashAtStart,
             onDeleteForwardAtEnd: onDeleteForwardAtEnd,
             onSelectionChange: onSelectionChange,
             pendingCursorOffset: documentCursorBinding(),
