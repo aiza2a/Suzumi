@@ -1,7 +1,7 @@
 import Foundation
 
 /// 匿名账号服务：封装 createAccount / getAccountInfo。
-struct AccountService {
+struct AccountService: Sendable {
     let client: APIClient
 
     /// 匿名注册。
@@ -15,8 +15,11 @@ struct AccountService {
 
     /// 查询当前账号信息（依赖 client.accessToken）。
     func getAccountInfo() async throws -> TelegraphAccount {
-        try await client.call("getAccountInfo",
+        try await client.call(
+            "getAccountInfo",
             params: ["fields": #"["short_name","author_name","author_url","page_count"]"#],
-            as: TelegraphAccount.self)
+            as: TelegraphAccount.self,
+            httpMethod: "GET"
+        )
     }
 }

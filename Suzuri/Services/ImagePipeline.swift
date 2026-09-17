@@ -47,6 +47,6 @@ struct ImagePipeline: Sendable {
     }
 }
 
-enum ImagePipelineError: Error, Equatable {
+enum ImagePipelineError: Error, Equatable, Sendable {
     case cacheUnavailable
 }

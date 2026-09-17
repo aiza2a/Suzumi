@@ -7,6 +7,9 @@ struct BlockEditorView: View {
     @Environment(BlockEditorDocument.self) private var document
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Read-only pages keep selection chrome visible but disable every mutation path.
+    var isEditable: Bool = true
+
     @State private var multiSelection = MultiBlockSelection()
     @State private var focusedListItemID: UUID?
     @State private var isTextSelectionToolbarVisible = false
@@ -19,6 +22,7 @@ struct BlockEditorView: View {
                         ForEach(document.blocks) { block in
                             BlockRowView(
                                 block: block,
+                                isEditable: isEditable,
                                 isBlockSelected: multiSelection.selectedBlockIDs.contains(block.id),
                                 isMultiSelectionActive: multiSelection.isActive,
                                 onTap: { handleTap(on: block.id) },
@@ -39,7 +43,10 @@ struct BlockEditorView: View {
                             ))
                             .simultaneousGesture(
                                 LongPressGesture(minimumDuration: 0.4)
-                                    .onEnded { _ in enterMultiSelection(with: block.id) }
+                                    .onEnded { _ in
+                                        guard isEditable else { return }
+                                        enterMultiSelection(with: block.id)
+                                    }
                             )
                         }
                     }
@@ -55,7 +62,7 @@ struct BlockEditorView: View {
                 }
             }
 
-            if multiSelection.isActive {
+            if isEditable && multiSelection.isActive {
                 multiSelectionBar
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
@@ -153,6 +160,7 @@ struct BlockEditorView: View {
     }
 
     private func handleTap(on blockID: BlockID) {
+        guard isEditable else { return }
         guard multiSelection.isActive else {
             isTextSelectionToolbarVisible = false
             return
@@ -166,6 +174,7 @@ struct BlockEditorView: View {
     }
 
     private func enterMultiSelection(with blockID: BlockID) {
+        guard isEditable else { return }
         document.focusedBlockID = nil
         document.pendingCursorOffset = nil
         if multiSelection.isActive {
@@ -187,6 +196,7 @@ struct BlockEditorView: View {
     }
 
     private func deleteSelectedBlocks() {
+        guard isEditable else { return }
         let selectedIDs = multiSelection.selectedBlockIDs
         multiSelection.clear()
         focusedListItemID = nil

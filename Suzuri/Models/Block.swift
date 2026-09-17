@@ -6,7 +6,7 @@ typealias BlockID = UUID
 
 // MARK: - List Items
 
-struct ListItem: Identifiable, Hashable, Codable {
+struct ListItem: Identifiable, Hashable, Codable, Sendable {
     let id: UUID
     var text: String
 
@@ -21,7 +21,7 @@ typealias BlockListItem = ListItem
 
 // MARK: - Block
 
-enum Block: Identifiable, Hashable, Codable {
+enum Block: Identifiable, Hashable, Codable, Sendable {
     case paragraph(id: BlockID, text: String)
     case heading(id: BlockID, level: Int, text: String)
     case bulletList(id: BlockID, items: [ListItem])

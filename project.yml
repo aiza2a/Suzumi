@@ -12,18 +12,22 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.suzuri.app
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait"
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         CODE_SIGNING_ALLOWED: NO
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: 0.1.0
-        SWIFT_VERSION: "5.9"
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_VERSION: "5"
   SuzuriTests:
     type: bundle.unit-test
     platform: iOS
     sources: [SuzuriTests]
+    settings:
+      base:
+        SWIFT_VERSION: "5"
     dependencies:
       - target: Suzuri
 schemes:

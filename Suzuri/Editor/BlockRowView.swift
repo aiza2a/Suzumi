@@ -5,6 +5,7 @@ import UIKit
 @MainActor
 struct BlockRowView: View {
     let block: Block
+    var isEditable = true
     @Environment(BlockEditorDocument.self) private var document
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -31,7 +32,11 @@ struct BlockRowView: View {
             }
             blockContent
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .contextMenu { blockContextMenu }
+                .contextMenu {
+                    if isEditable {
+                        blockContextMenu
+                    }
+                }
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
@@ -45,6 +50,7 @@ struct BlockRowView: View {
         .animation(reduceMotion ? nil : AppAnimation.blockFocus, value: isFocused)
         .animation(reduceMotion ? nil : AppAnimation.blockFocus, value: isBlockSelected)
         .onTapGesture {
+            guard isEditable else { return }
             if !isMultiSelectionActive, !block.isListBlock {
                 focusRow()
             }
@@ -83,8 +89,8 @@ struct BlockRowView: View {
         .padding(.trailing, 4)
         .opacity(isFocused ? 1 : 0)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isFocused)
-        .allowsHitTesting(isFocused)
-        .accessibilityHidden(!isFocused)
+        .allowsHitTesting(isFocused && isEditable)
+        .accessibilityHidden(!isFocused || !isEditable)
     }
 
     private var addBlockMenu: some View {
@@ -361,7 +367,7 @@ struct BlockRowView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            guard !isMultiSelectionActive else { return }
+            guard isEditable, !isMultiSelectionActive else { return }
             let isChangingFocus = document.focusedBlockID != blockID
                 || activeListItemID(for: block) != item.id
             document.focusedBlockID = blockID
@@ -402,6 +408,7 @@ struct BlockRowView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
+                .disabled(!isEditable)
         }
         .padding(.vertical, 4)
     }
@@ -436,6 +443,7 @@ struct BlockRowView: View {
             textColor: textColor,
             lineSpacing: 3,
             isFocused: isFocused,
+            isEditable: isEditable,
             placeholder: placeholder,
             onEnter: onEnter,
             onBackspaceAtStart: onBackspaceAtStart,
@@ -470,6 +478,7 @@ struct BlockRowView: View {
             font: font,
             lineSpacing: 3,
             isFocused: isFocused,
+            isEditable: isEditable,
             placeholder: placeholder,
             onEnter: onEnter,
             onBackspaceAtStart: onBackspaceAtStart,

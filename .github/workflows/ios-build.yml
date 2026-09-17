@@ -5,12 +5,12 @@ on:
 
 jobs:
   build-test:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "26"
+          xcode-version: "26.3"
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate
@@ -18,16 +18,33 @@ jobs:
       - name: Build (no signing)
         run: |
           xcodebuild -project Suzuri.xcodeproj -scheme Suzuri \
+            -configuration Release \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO build
+      - name: Select simulator
+        run: |
+          set -euo pipefail
+          simulator_udid="$(xcrun simctl list devices available \
+            | sed -nE '/iPhone 16 \(/s/.*\(([0-9A-Fa-f-]{36})\).*/\1/p' \
+            | head -n 1)"
+          if [[ -z "$simulator_udid" ]]; then
+            simulator_udid="$(xcrun simctl list devices available \
+              | sed -nE '/iPhone/s/.*\(([0-9A-Fa-f-]{36})\).*/\1/p' \
+              | head -n 1)"
+          fi
+          test -n "$simulator_udid"
+          echo "SIMULATOR_UDID=$simulator_udid" >> "$GITHUB_ENV"
       - name: Test
         run: |
+          set -euo pipefail
           xcodebuild -project Suzuri.xcodeproj -scheme Suzuri \
-            -destination 'platform=iOS Simulator,name=iPhone 15' \
-            -derivedDataPath build test
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" test
       - name: Upload app
         uses: actions/upload-artifact@v4
         with:
           name: Suzuri.app
-          path: build/Release-iphoneos/Suzuri.app
+          path: build/Build/Products/Release-iphoneos/Suzuri.app
+          if-no-files-found: error

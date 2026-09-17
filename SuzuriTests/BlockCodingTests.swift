@@ -151,6 +151,29 @@ final class BlockCodingTests: XCTestCase {
         XCTAssertEqual(linkURL, url)
     }
 
+    func testUnsupportedInlineFormattingIsDetected() {
+        let node = TelegraphNode(
+            tag: "p",
+            attrs: nil,
+            children: [
+                .text("before"),
+                .node(TelegraphNode(tag: "strong", attrs: nil, children: [.text("bold")]))
+            ]
+        )
+
+        XCTAssertTrue(BlockDecoder.containsUnsupportedNodes([node]))
+    }
+
+    func testTopLevelLinkRemainsSupported() {
+        let node = TelegraphNode(
+            tag: "a",
+            attrs: ["href": "https://example.com"],
+            children: [.text("link")]
+        )
+
+        XCTAssertFalse(BlockDecoder.containsUnsupportedNodes([node]))
+    }
+
     func testDecoderMapsH4ToHeadingLevelTwo() {
         let node = TelegraphNode(tag: "h4", attrs: nil, children: [.text("subtitle")])
         guard case let .heading(_, level, text) = BlockDecoder.decode(node) else {

@@ -97,13 +97,65 @@ final class APIClientTests: XCTestCase {
     func testAccessTokenInjectedAsQuery() async throws {
         MockURLProtocol.data = Data(#"{"ok":true,"result":{"short_name":"u1"}}"#.utf8)
         let client = makeClient()
-        _ = try await client.call("getAccountInfo", params: [:], as: TelegraphAccount.self)
+        _ = try await client.call(
+            "getAccountInfo",
+            params: [:],
+            as: TelegraphAccount.self,
+            httpMethod: "GET"
+        )
 
         let url = try XCTUnwrap(MockURLProtocol.lastRequest?.url)
         let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let items = comps?.queryItems ?? []
         XCTAssertTrue(items.contains(where: { $0.name == "access_token" }))
         XCTAssertEqual(comps?.path, "/getAccountInfo")
+    }
+
+    /// POST 业务参数进入 form body，token 仍作为 query 参数。
+    func testPostParametersUseFormEncodedBody() async throws {
+        MockURLProtocol.data = Data(#"{"ok":true,"result":{"short_name":"u1"}}"#.utf8)
+        let client = makeClient()
+        _ = try await client.call(
+            "createAccount",
+            params: ["short_name": "a b&c"],
+            as: TelegraphAccount.self
+        )
+
+        let request = try XCTUnwrap(MockURLProtocol.lastRequest)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Content-Type"),
+            "application/x-www-form-urlencoded; charset=utf-8"
+        )
+        let body = try XCTUnwrap(String(data: try XCTUnwrap(request.httpBody), encoding: .utf8))
+        XCTAssertTrue(body.contains("short_name=a+b%26c"))
+        let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
+        XCTAssertNil(query?.first(where: { $0.name == "short_name" }))
+        XCTAssertEqual(query?.first(where: { $0.name == "access_token" })?.value, "token-xyz")
+    }
+
+    func testOkWithoutResultThrowsInvalidResponse() async {
+        MockURLProtocol.data = Data(#"{"ok":true}"#.utf8)
+        do {
+            _ = try await makeClient().call("getAccountInfo", params: [:], as: TelegraphAccount.self)
+            XCTFail("ok=true 且缺少 result 应抛 invalidResponse")
+        } catch let error as TelegraphError {
+            XCTAssertEqual(error, .invalidResponse)
+        } catch {
+            XCTFail("应为 TelegraphError，实际为 \(error)")
+        }
+    }
+
+    func testErrorWithoutMessageThrowsInvalidResponse() async {
+        MockURLProtocol.data = Data(#"{"ok":false}"#.utf8)
+        do {
+            _ = try await makeClient().call("getAccountInfo", params: [:], as: TelegraphAccount.self)
+            XCTFail("ok=false 且缺少 error 应抛 invalidResponse")
+        } catch let error as TelegraphError {
+            XCTAssertEqual(error, .invalidResponse)
+        } catch {
+            XCTFail("应为 TelegraphError，实际为 \(error)")
+        }
     }
 
     /// mock 返回坏 JSON → 抛 `.invalidResponse`

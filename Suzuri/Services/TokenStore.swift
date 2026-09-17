@@ -1,16 +1,16 @@
+import CryptoKit
 import Foundation
 import Security
 
 /// Keychain 存取封装。
 ///
 /// service = "com.suzuri.app"，account 区分 "access_token" / "short_name"。
-/// 项类型 `kSecClassGenericPassword`，可访问性 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`
-/// （匿名本地身份，不随 iCloud 同步、首次解锁后可用）。
+/// 匿名本地身份不随 iCloud 同步、首次解锁后可用。
 final class TokenStore {
     static let service = "com.suzuri.app"
 
     /// 账号键名约定。
-    enum Key: String {
+    enum Key: String, Sendable {
         case accessToken = "access_token"
         case shortName = "short_name"
     }
@@ -19,6 +19,54 @@ final class TokenStore {
 
     init(service: String = TokenStore.service) {
         self.service = service
+    }
+
+    // MARK: - Origin-scoped account keys
+
+    /// Returns the URL origin used to isolate credentials between mirrors.
+    static func origin(for baseURL: URL) -> String {
+        guard let scheme = baseURL.scheme?.lowercased(),
+              let host = baseURL.host?.lowercased()
+        else {
+            return baseURL.absoluteString.lowercased()
+        }
+
+        var result = "\(scheme)://\(host)"
+        if let port = baseURL.port,
+           !((scheme == "https" && port == 443) || (scheme == "http" && port == 80)) {
+            result += ":\(port)"
+        }
+        return result
+    }
+
+    static func origin(for baseURL: String) -> String {
+        guard let url = URL(string: baseURL) else {
+            return baseURL.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+        return origin(for: url)
+    }
+
+    /// Stable, non-reversible identifier used in Keychain account names and cache scopes.
+    static func fingerprint(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    static func scopedAccount(_ key: Key, origin: String) -> String {
+        "\(key.rawValue)_\(fingerprint(origin))"
+    }
+
+    func saveString(_ string: String, for key: Key, origin: String) throws {
+        try saveString(string, for: Self.scopedAccount(key, origin: origin))
+    }
+
+    func loadString(_ key: Key, origin: String) -> String? {
+        loadString(Self.scopedAccount(key, origin: origin))
+    }
+
+    func delete(_ key: Key, origin: String) {
+        delete(Self.scopedAccount(key, origin: origin))
     }
 
     // MARK: - Data 级存取

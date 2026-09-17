@@ -174,6 +174,86 @@ struct BlockDecoder {
         decode(nodes)
     }
 
+    /// Returns true when the block editor would drop a node or inline format on republish.
+    static func containsUnsupportedNodes(_ nodes: [TelegraphNode]) -> Bool {
+        nodes.contains { containsUnsupportedNode($0, isTopLevel: true) }
+    }
+
+    private static func containsUnsupportedNode(
+        _ node: TelegraphNode,
+        isTopLevel: Bool
+    ) -> Bool {
+        guard let tag = node.tag?.lowercased() else {
+            // Top-level text nodes are represented as paragraphs. Nested element children
+            // would be flattened by the editor and therefore are not lossless.
+            return node.children?.contains { child in
+                if case .node(_) = child { return true }
+                return false
+            } ?? false
+        }
+
+        switch tag {
+        case "p", "h1", "h2", "h3", "h4", "h5", "h6",
+             "blockquote", "aside", "pre", "code":
+            // These Block cases retain text only; every nested element would be lost.
+            return node.children?.contains { child in
+                if case .node(_) = child { return true }
+                return false
+            } ?? false
+
+        case "li", "figcaption":
+            // These tags are only representable in their parent list/figure block.
+            guard !isTopLevel else { return true }
+            return node.children?.contains { child in
+                if case .node(_) = child { return true }
+                return false
+            } ?? false
+
+        case "ul", "ol":
+            return node.children?.contains { child in
+                guard case let .node(childNode) = child,
+                      childNode.tag?.lowercased() == "li"
+                else { return true }
+                return containsUnsupportedNode(childNode, isTopLevel: false)
+            } ?? false
+
+        case "a":
+            // A top-level anchor maps to Block.link. An inline anchor cannot be represented
+            // separately from the surrounding text block.
+            guard isTopLevel,
+                  node.attrs?["href"].flatMap({ URL(string: $0) }) != nil
+            else { return true }
+            return node.children?.contains { child in
+                if case .node(_) = child { return true }
+                return false
+            } ?? false
+
+        case "figure":
+            return node.children?.contains { child in
+                guard case let .node(childNode) = child else { return true }
+                switch childNode.tag?.lowercased() {
+                case "img":
+                    return childNode.children?.isEmpty == false
+                case "figcaption":
+                    return containsUnsupportedNode(childNode, isTopLevel: false)
+                default:
+                    return true
+                }
+            } ?? false
+
+        case "img":
+            // An image block is supported only at the top level or inside a figure.
+            guard isTopLevel else { return true }
+            return node.children?.isEmpty == false
+
+        case "hr":
+            return node.children?.isEmpty == false
+
+        default:
+            return true
+        }
+    }
+
     static func decode(_ node: TelegraphNode) -> Block? {
         let tag = node.tag?.lowercased()
         switch tag {

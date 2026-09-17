@@ -11,6 +11,7 @@ struct BlockTextView: UIViewRepresentable {
     var textColor: UIColor = .label
     var lineSpacing: CGFloat = 0
     var isFocused: Bool = false
+    var isEditable: Bool = true
     var placeholder: String = ""
 
     var onEnter: ((_ cursorOffset: Int) -> Void)? = nil
@@ -30,7 +31,7 @@ struct BlockTextView: UIViewRepresentable {
         let textView = BlockUITextView()
         textView.delegate = context.coordinator
         textView.backgroundColor = .clear
-        textView.isEditable = isFocused
+        textView.isEditable = isFocused && isEditable
         textView.isSelectable = true
         textView.alwaysBounceVertical = false
         textView.isScrollEnabled = false
@@ -47,8 +48,8 @@ struct BlockTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: BlockUITextView, context: Context) {
-        textView.isEditable = isFocused
-        if !isFocused, textView.isFirstResponder {
+        textView.isEditable = isFocused && isEditable
+        if (!isFocused || !isEditable), textView.isFirstResponder {
             textView.resignFirstResponder()
         }
         textView.placeholder = placeholder
@@ -63,18 +64,18 @@ struct BlockTextView: UIViewRepresentable {
             textView.selectedRange = clampedRange(selectedRange, textLength: textView.text.utf16.count)
         }
 
-        if isFocused, let pendingOffset = pendingCursorOffset?.wrappedValue {
+        if isFocused && isEditable, let pendingOffset = pendingCursorOffset?.wrappedValue {
             let clampedOffset = max(0, min(pendingOffset, textView.text.utf16.count))
             focus(textView)
             textView.selectedRange = NSRange(location: clampedOffset, length: 0)
             pendingCursorOffset?.wrappedValue = nil
-        } else if isFocused, !textView.isFirstResponder {
+        } else if isFocused && isEditable, !textView.isFirstResponder {
             focus(textView)
         }
     }
 
     private func focus(_ textView: BlockUITextView) {
-        guard !textView.isFirstResponder else { return }
+        guard textView.isEditable, !textView.isFirstResponder else { return }
         if textView.window == nil {
             DispatchQueue.main.async { [weak textView] in
                 guard let textView, textView.isEditable else { return }
@@ -146,6 +147,7 @@ struct BlockTextView: UIViewRepresentable {
             replacementText replacement: String
         ) -> Bool {
             guard let blockTextView = textView as? BlockUITextView else { return true }
+            guard blockTextView.isEditable else { return false }
             if replacement == "\n", blockTextView.onEnter != nil {
                 blockTextView.onEnterWithSelection?(range)
                 return false
@@ -263,6 +265,7 @@ final class BlockUITextView: UITextView {
     }
 
     override func insertText(_ text: String) {
+        guard isEditable else { return }
         if text == "\n", let onEnter {
             if let onEnterWithSelection {
                 onEnterWithSelection(selectedRange)
@@ -288,6 +291,7 @@ final class BlockUITextView: UITextView {
     }
 
     override func deleteBackward() {
+        guard isEditable else { return }
         goalColumnXBinding?.wrappedValue = nil
         if selectedRange.length == 0,
            selectedRange.location == 0,
@@ -300,6 +304,10 @@ final class BlockUITextView: UITextView {
     }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard isEditable else {
+            super.pressesBegan(presses, with: event)
+            return
+        }
         guard let key = presses.first?.key else {
             super.pressesBegan(presses, with: event)
             return

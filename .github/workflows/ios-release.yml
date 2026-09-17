@@ -1,0 +1,91 @@
+name: iOS Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Marketing version, for example 0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Set the repository variable RELEASE_ENABLED=true only after all signing and
+# App Store Connect secrets below have been configured. Until then this job is
+# intentionally skipped (D5 release gate).
+# Required repository secrets:
+# IOS_CERT_P12, IOS_CERT_PASSWORD, IOS_PROVISIONING_PROFILE (base64),
+# APPLE_TEAM_ID, ASC_ISSUER_ID, ASC_API_KEY_ID, ASC_API_PRIVATE_KEY.
+jobs:
+  release:
+    if: vars.RELEASE_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    environment: ios-release
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90
+        with:
+          xcode-version: "26.3"
+      - name: Import signing
+        uses: apple-actions/import-codesign-certs@63fff01cd422d4b7b855d40ca1e9d34d2de9427d
+        with:
+          p12-file-base64: ${{ secrets.IOS_CERT_P12 }}
+          p12-password: ${{ secrets.IOS_CERT_PASSWORD }}
+      - name: Install provisioning profile
+        env:
+          IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+        run: |
+          set -euo pipefail
+          test -n "$IOS_PROVISIONING_PROFILE"
+          profile_path="$RUNNER_TEMP/Suzuri.mobileprovision"
+          echo "$IOS_PROVISIONING_PROFILE" | base64 -D > "$profile_path"
+          security cms -D -i "$profile_path" > "$RUNNER_TEMP/SuzuriProfile.plist"
+          profile_uuid=$(/usr/libexec/PlistBuddy -c 'Print:UUID' "$RUNNER_TEMP/SuzuriProfile.plist")
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$profile_path" "$HOME/Library/MobileDevice/Provisioning Profiles/$profile_uuid.mobileprovision"
+          echo "PROFILE_UUID=$profile_uuid" >> "$GITHUB_ENV"
+      - name: Install XcodeGen
+        run: brew install xcodegen && xcodegen generate
+      - name: Archive
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          release_version="$RELEASE_VERSION"
+          if [[ ! "$release_version" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+            echo "Version must be MAJOR.MINOR or MAJOR.MINOR.PATCH: $release_version" >&2
+            exit 1
+          fi
+          build_number=$((GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT))
+          xcodebuild -project Suzuri.xcodeproj -scheme Suzuri \
+            -configuration Release -archivePath build/Suzuri.xcarchive \
+            -destination 'generic/platform=iOS' \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            MARKETING_VERSION="$release_version" \
+            CURRENT_PROJECT_VERSION="$build_number" \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" archive
+      - name: Export IPA
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          sed \
+            -e 's/\$(TEAM_ID_PLACEHOLDER)/'"$APPLE_TEAM_ID"'/g' \
+            -e 's/\$(PROFILE_UUID_PLACEHOLDER)/'"$PROFILE_UUID"'/g' \
+            .github/exportOptions.plist > "$RUNNER_TEMP/exportOptions.plist"
+          xcodebuild -exportArchive -archivePath build/Suzuri.xcarchive \
+            -exportOptionsPlist "$RUNNER_TEMP/exportOptions.plist" \
+            -exportPath build/export
+      - uses: apple-actions/upload-testflight-build@1fc69ca369a60b813eaaa2d936eda22794b52e17
+        with:
+          app-path: build/export/Suzuri.ipa
+          issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+          api-key-id: ${{ secrets.ASC_API_KEY_ID }}
+          api-private-key: ${{ secrets.ASC_API_PRIVATE_KEY }}
+          uses-non-exempt-encryption: 'false'

@@ -20,6 +20,10 @@ struct TelegraphCompatHost: ImageHosting {
     }
 
     func upload(_ data: Data, filename: String, mimeType: String) async throws -> URL {
+        // Basic Auth must never be sent to an unencrypted endpoint.
+        guard baseURL.scheme?.lowercased() == "https" else {
+            throw HostError.badResponse
+        }
         let boundary = makeMultipartBoundary()
         var request = URLRequest(url: baseURL.appendingPathComponent("upload"))
         request.httpMethod = "POST"
