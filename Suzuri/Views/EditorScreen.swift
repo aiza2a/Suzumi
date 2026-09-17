@@ -421,10 +421,12 @@ struct EditorScreen: View {
         targetPagePath = existingDraft?.pagePath ?? currentPage?.path
         isUnpublishedDraft = existingDraft.map { !$0.isPublished } ?? false
 
-        if let existingDraft,
-           let savedBlocks = try? JSONDecoder().decode([Block].self, from: existingDraft.blocksData),
-           !savedBlocks.isEmpty {
-            document.blocks = savedBlocks
+        if let existingDraft {
+            title = existingDraft.title
+            if let savedBlocks = try? JSONDecoder().decode([Block].self, from: existingDraft.blocksData),
+               !savedBlocks.isEmpty {
+                document.blocks = savedBlocks
+            }
         }
 
         if let page = currentPage {
@@ -438,6 +440,8 @@ struct EditorScreen: View {
             isUnpublishedDraft = true
         }
 
+        // Let onChange observers run while hydration is still guarded.
+        await Task.yield()
         isHydrating = false
     }
 
@@ -476,6 +480,10 @@ struct EditorScreen: View {
             isPageLoadError = false
 
             if !preserveLocalDraft {
+                // Keep mutation observers quiet while remote state is applied. On recovery,
+                // yield once so SwiftUI processes the guarded transaction before re-enabling edits.
+                let wasHydrating = isHydrating
+                isHydrating = true
                 title = remotePage.title
                 authorName = remotePage.authorName ?? sessionController.authorName ?? ""
                 if let content = remotePage.content {
@@ -484,6 +492,10 @@ struct EditorScreen: View {
                         document.blocks = decoded
                     }
                 }
+                if !wasHydrating {
+                    await Task.yield()
+                }
+                isHydrating = wasHydrating
             }
         } catch {
             // Cached content remains usable. Surface a retry without turning it into publish.

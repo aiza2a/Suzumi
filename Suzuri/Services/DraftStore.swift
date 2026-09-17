@@ -20,15 +20,23 @@ final class DraftStore {
 
     init(inMemory: Bool = false) {
         let configuration = ModelConfiguration(isStoredInMemoryOnly: inMemory)
+        let resolvedContainer: ModelContainer
         do {
-            self.container = try ModelContainer(
+            resolvedContainer = try ModelContainer(
                 for: Draft.self,
                 configurations: configuration
             )
         } catch {
-            fatalError("Unable to create Draft model container: \(error)")
+            // A damaged persistent store must not prevent the editor from launching.
+            // The user can continue in memory while the next save rebuilds local state.
+            let fallback = ModelConfiguration(isStoredInMemoryOnly: true)
+            resolvedContainer = try! ModelContainer(
+                for: Draft.self,
+                configurations: fallback
+            )
         }
-        self.modelContext = container.mainContext
+        self.container = resolvedContainer
+        self.modelContext = resolvedContainer.mainContext
     }
 
     init(container: ModelContainer) {
