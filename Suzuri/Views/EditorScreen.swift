@@ -47,9 +47,18 @@ struct EditorScreen: View {
 
                         if let url = publishedURL {
                             AppGlassCard(cornerRadius: 20) {
-                                Label("发布成功", systemImage: "checkmark.circle.fill")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(Color.brand600)
+                                HStack {
+                                    Label("发布成功", systemImage: "checkmark.circle.fill")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(Color.brand600)
+                                    Spacer()
+                                    ShareLink(item: url) {
+                                        Image(systemName: "square.and.arrow.up")
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(Color.brand600)
+                                    }
+                                    .accessibilityLabel("分享链接")
+                                }
                                 Text(url.absoluteString)
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
@@ -77,6 +86,7 @@ struct EditorScreen: View {
             } message: {
                 Text(errorMessage ?? "")
             }
+            .sensoryFeedback(.success, trigger: publishedURL)   // 发布成功触感反馈（iOS 17）
         }
     }
 
@@ -86,6 +96,7 @@ struct EditorScreen: View {
             Circle()
                 .fill(hasContent ? Color.brand600 : Color.secondary.opacity(0.4))
                 .frame(width: 8, height: 8)
+                .accessibilityHidden(true)   // 装饰状态点，信息已由发布按钮表达
 
             AppGlassButton(
                 title: "发布",
@@ -110,7 +121,8 @@ struct EditorScreen: View {
     }
 
     private var canPublish: Bool {
-        hasContent && !isPublishing
+        // 恢复 D1 标题必填：空标题会触发 API 报错；正文可为空。
+        !title.trimmingCharacters(in: .whitespaces).isEmpty && !isPublishing
     }
 
     /// 发布：取/建账号 → 构造 Node content → 校验 64KB → createPage。（D1 逻辑，未改）

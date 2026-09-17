@@ -71,9 +71,11 @@ private struct PageRowView: View {
                     Spacer()
                     Image(systemName: "chevron.right")
                         .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)   // 纯装饰箭头
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .accessibilityElement(children: .combine)   // 标题/摘要/元信息合并为一个可读元素
             }
         }
     }
