@@ -10,6 +10,9 @@ final class Draft: Identifiable {
     var updatedAt: Date = .now
     var isPublished: Bool = false
     var pagePath: String?
+    /// API origin and account scope prevent a draft from crossing mirror identities.
+    var origin: String?
+    var accountFingerprint: String?
     var schemaVersion: Int = 1
 
     init() {}
@@ -21,6 +24,8 @@ final class Draft: Identifiable {
         updatedAt: Date = .now,
         isPublished: Bool = false,
         pagePath: String? = nil,
+        origin: String? = nil,
+        accountFingerprint: String? = nil,
         schemaVersion: Int = 1
     ) {
         self.id = id
@@ -29,6 +34,8 @@ final class Draft: Identifiable {
         self.updatedAt = updatedAt
         self.isPublished = isPublished
         self.pagePath = pagePath
+        self.origin = origin
+        self.accountFingerprint = accountFingerprint
         self.schemaVersion = schemaVersion
     }
 }

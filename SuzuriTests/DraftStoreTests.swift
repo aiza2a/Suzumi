@@ -20,6 +20,31 @@ final class DraftStoreTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode([Block].self, from: draft.blocksData), blocks)
     }
 
+    func testDraftScopeFiltersAcrossOriginsAndAccounts() throws {
+        let store = DraftStore(inMemory: true)
+        let id = UUID()
+        try store.saveNow(
+            id: id,
+            title: "隔离草稿",
+            blocks: [.emptyParagraph()],
+            origin: "https://api.telegra.ph",
+            accountFingerprint: "account-a"
+        )
+
+        XCTAssertEqual(
+            store.loadAll(origin: "https://api.telegra.ph", accountFingerprint: "account-a").count,
+            1
+        )
+        XCTAssertTrue(
+            store.loadAll(origin: "https://api.graph.org", accountFingerprint: "account-a").isEmpty
+        )
+        XCTAssertTrue(
+            store.loadAll(origin: "https://api.telegra.ph", accountFingerprint: "account-b").isEmpty
+        )
+        XCTAssertEqual(store.load(id: id)?.origin, "https://api.telegra.ph")
+        XCTAssertNil(store.lastSaveError)
+    }
+
     func testSaveNowUpdatesExistingEntityInsteadOfDuplicating() throws {
         let store = DraftStore(inMemory: true)
         let id = UUID()
