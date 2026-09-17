@@ -9,10 +9,17 @@ struct ImageUploadService: Sendable {
     }
 
     func upload(_ data: Data, filename: String, mimeType: String) async throws -> URL {
+        let result = try await uploadWithProvider(data, filename: filename, mimeType: mimeType)
+        return result.url
+    }
+
+    /// 上传并返回实际成功的 Provider ID，供上层展示或记录降级结果。
+    func uploadWithProvider(_ data: Data, filename: String, mimeType: String) async throws -> (url: URL, providerID: String) {
         var lastError: Error?
         for host in hosts {
             do {
-                return try await host.upload(data, filename: filename, mimeType: mimeType)
+                let url = try await host.upload(data, filename: filename, mimeType: mimeType)
+                return (url: url, providerID: host.id)
             } catch {
                 lastError = error
             }
