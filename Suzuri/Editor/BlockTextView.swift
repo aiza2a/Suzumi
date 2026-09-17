@@ -147,6 +147,7 @@ struct BlockTextView: UIViewRepresentable {
             replacementText replacement: String
         ) -> Bool {
             guard let blockTextView = textView as? BlockUITextView else { return true }
+            guard blockTextView.isEditable else { return false }
             if replacement == "\n", blockTextView.onEnter != nil {
                 blockTextView.onEnterWithSelection?(range)
                 return false
@@ -264,6 +265,7 @@ final class BlockUITextView: UITextView {
     }
 
     override func insertText(_ text: String) {
+        guard isEditable else { return }
         if text == "\n", let onEnter {
             if let onEnterWithSelection {
                 onEnterWithSelection(selectedRange)
@@ -289,6 +291,7 @@ final class BlockUITextView: UITextView {
     }
 
     override func deleteBackward() {
+        guard isEditable else { return }
         goalColumnXBinding?.wrappedValue = nil
         if selectedRange.length == 0,
            selectedRange.location == 0,
@@ -301,6 +304,10 @@ final class BlockUITextView: UITextView {
     }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard isEditable else {
+            super.pressesBegan(presses, with: event)
+            return
+        }
         guard let key = presses.first?.key else {
             super.pressesBegan(presses, with: event)
             return
