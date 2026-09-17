@@ -39,6 +39,30 @@ final class PageDecodingTests: XCTestCase {
         XCTAssertTrue(result.pages[0].canEdit)
     }
 
+    func testPageDecodesTopLevelStringContentAsParagraphs() throws {
+        let json = #"""
+        {
+          "path":"plain-content",
+          "url":"https://telegra.ph/plain-content",
+          "title":"纯文本",
+          "description":"",
+          "content":["第一段","第二段"],
+          "views":0,
+          "can_edit":false
+        }
+        """#
+
+        let page = try JSONDecoder().decode(Page.self, from: Data(json.utf8))
+
+        guard case let .paragraph(_, first) = try XCTUnwrap(page.content?.first),
+              case let .paragraph(_, second) = try XCTUnwrap(page.content?[1])
+        else {
+            return XCTFail("字符串 content 应转换为 paragraph nodes")
+        }
+        XCTAssertEqual(first, "第一段")
+        XCTAssertEqual(second, "第二段")
+    }
+
     func testPageDecodesCanEditFalse() throws {
         let json = #"""
         {

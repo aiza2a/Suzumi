@@ -65,7 +65,7 @@ struct Page: Codable, Identifiable, Hashable, Sendable {
         authorName = try container.decodeIfPresent(String.self, forKey: .authorName)
         authorUrl = try container.decodeIfPresent(String.self, forKey: .authorUrl)
         imageUrl = try container.decodeIfPresent(String.self, forKey: .imageUrl)
-        content = try container.decodeIfPresent([TelegraphNode].self, forKey: .content)
+        content = try Self.decodeContent(from: container)
         views = try container.decodeIfPresent(Int.self, forKey: .views) ?? 0
         hasCanEditField = container.contains(.canEdit)
         canEdit = try container.decodeIfPresent(Bool.self, forKey: .canEdit) ?? false
@@ -82,7 +82,27 @@ struct Page: Codable, Identifiable, Hashable, Sendable {
         try container.encodeIfPresent(imageUrl, forKey: .imageUrl)
         try container.encodeIfPresent(content, forKey: .content)
         try container.encode(views, forKey: .views)
-        try container.encode(canEdit, forKey: .canEdit)
+        if hasCanEditField {
+            try container.encode(canEdit, forKey: .canEdit)
+        }
+    }
+
+    private static func decodeContent(
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> [TelegraphNode]? {
+        guard container.contains(.content) else {
+            return nil
+        }
+        if try container.decodeNil(forKey: .content) {
+            return nil
+        }
+        if let nodes = try? container.decode([TelegraphNode].self, forKey: .content) {
+            return nodes
+        }
+        let strings = try container.decode([String].self, forKey: .content)
+        return strings.map {
+            TelegraphNode(tag: "p", attrs: nil, children: [.text($0)])
+        }
     }
 
     /// Returns a copy with an explicit edit permission.
@@ -118,7 +138,7 @@ struct Page: Codable, Identifiable, Hashable, Sendable {
             views: views,
             canEdit: original?.canEdit ?? fallback
         )
-        page.hasCanEditField = original?.hasCanEditField ?? false
+        page.hasCanEditField = original?.hasCanEditField ?? fallback
         return page
     }
 
