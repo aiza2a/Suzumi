@@ -29,7 +29,7 @@ struct BlockEditorView: View {
                                 focusedListItemID: $focusedListItemID
                             )
                             .id(block.id)
-                            .transition(.asymmetric(
+                            .transition(reduceMotion ? .identity : .asymmetric(
                                 insertion: .opacity.combined(
                                     with: .scale(scale: 0.96, anchor: .top)
                                 ),
@@ -49,7 +49,7 @@ struct BlockEditorView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .onChange(of: document.focusedBlockID) { _, newID in
                     guard let newID, document.index(of: newID) != nil else { return }
-                    withAnimation(AppAnimation.fadeSlow) {
+                    withAnimation(reduceMotion ? nil : AppAnimation.fadeSlow) {
                         proxy.scrollTo(newID, anchor: .center)
                     }
                 }
@@ -59,7 +59,7 @@ struct BlockEditorView: View {
                 multiSelectionBar
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .transition(reduceMotion ? .identity : .move(edge: .top).combined(with: .opacity))
                     .zIndex(2)
             } else if isTextSelectionToolbarVisible {
                 SelectionToolbar(
@@ -67,7 +67,7 @@ struct BlockEditorView: View {
                     onDismiss: { isTextSelectionToolbarVisible = false }
                 )
                 .padding(.top, 8)
-                .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .bottom)))
+                .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.94, anchor: .bottom)))
                 .zIndex(1)
             }
         }

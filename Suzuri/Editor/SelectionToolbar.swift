@@ -6,6 +6,8 @@ import SwiftUI
 /// deferred until the editor has a stable block-selection model.
 @MainActor
 struct SelectionToolbar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let isVisible: Bool
     var onDismiss: (() -> Void)?
 
@@ -32,7 +34,7 @@ struct SelectionToolbar: View {
         .opacity(isVisible ? 1 : 0)
         .scaleEffect(isVisible ? 1 : 0.94, anchor: .bottom)
         .allowsHitTesting(isVisible)
-        .animation(AppAnimation.pop, value: isVisible)
+        .animation(reduceMotion ? nil : AppAnimation.pop, value: isVisible)
         .accessibilityHidden(!isVisible)
     }
 }

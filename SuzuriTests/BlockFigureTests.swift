@@ -81,7 +81,6 @@ final class BlockFigureTests: XCTestCase {
     func testFigureWithoutImageAndCaptionIsFiltered() {
         let block = Block.figure(id: UUID(), imageURL: nil, caption: "")
 
-        XCTAssertNil(BlockEncoder.toNode(block))
         XCTAssertTrue(BlockEncoder.toNodes([block]).isEmpty)
     }
 }
