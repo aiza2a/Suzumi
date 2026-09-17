@@ -7,7 +7,7 @@ final class Draft: Identifiable {
     var id: UUID = UUID()
     var title: String = ""
     var blocksData: Data = Data()
-    var updatedAt: Date = .now
+    var updatedAt: Date = Date()
     var isPublished: Bool = false
     var pagePath: String?
     /// API origin and account scope prevent a draft from crossing mirror identities.
@@ -21,7 +21,7 @@ final class Draft: Identifiable {
         id: UUID = UUID(),
         title: String = "",
         blocksData: Data = Data(),
-        updatedAt: Date = .now,
+        updatedAt: Date = Date(),
         isPublished: Bool = false,
         pagePath: String? = nil,
         origin: String? = nil,

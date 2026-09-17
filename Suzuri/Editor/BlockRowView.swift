@@ -183,8 +183,8 @@ struct BlockRowView: View {
             placeholder: placeholder,
             onEnter: { splitBlock(id: id, utf16Offset: $0) },
             onBackspaceAtStart: { mergePreviousBlock(id: id) },
-            onArrowUp: { moveToPreviousBlock(from: id) },
-            onArrowDown: { moveToNextBlock(from: id) },
+            onArrowUp: { _ in moveToPreviousBlock(from: id) },
+            onArrowDown: { _ in moveToNextBlock(from: id) },
             onSlashAtStart: { showSlashCommand = true },
             onDeleteForwardAtEnd: { mergeNextBlock(id: id) }
         )
@@ -212,8 +212,8 @@ struct BlockRowView: View {
                     mergePreviousBlock(id: id)
                 }
             },
-            onArrowUp: { moveToPreviousBlock(from: id) },
-            onArrowDown: { moveToNextBlock(from: id) },
+            onArrowUp: { _ in moveToPreviousBlock(from: id) },
+            onArrowDown: { _ in moveToNextBlock(from: id) },
             onDeleteForwardAtEnd: { mergeNextBlock(id: id) }
         )
         .font(.system(size: level <= 1 ? 28 : 23, weight: .bold))
@@ -235,8 +235,8 @@ struct BlockRowView: View {
                 placeholder: "引用",
                 onEnter: { splitBlock(id: id, utf16Offset: $0) },
                 onBackspaceAtStart: { mergePreviousBlock(id: id) },
-                onArrowUp: { moveToPreviousBlock(from: id) },
-                onArrowDown: { moveToNextBlock(from: id) },
+                onArrowUp: { _ in moveToPreviousBlock(from: id) },
+                onArrowDown: { _ in moveToNextBlock(from: id) },
                 onDeleteForwardAtEnd: { mergeNextBlock(id: id) }
             )
             .frame(minHeight: 28)
@@ -252,8 +252,8 @@ struct BlockRowView: View {
             id: id,
             font: .monospacedSystemFont(ofSize: 15, weight: .regular),
             placeholder: "代码",
-            onArrowUp: { moveToPreviousBlock(from: id) },
-            onArrowDown: { moveToNextBlock(from: id) },
+            onArrowUp: { _ in moveToPreviousBlock(from: id) },
+            onArrowDown: { _ in moveToNextBlock(from: id) },
             onDeleteForwardAtEnd: { mergeNextBlock(id: id) }
         )
         .padding(12)
@@ -274,8 +274,8 @@ struct BlockRowView: View {
                 placeholder: "链接文字",
                 onEnter: { splitBlock(id: id, utf16Offset: $0) },
                 onBackspaceAtStart: { mergePreviousBlock(id: id) },
-                onArrowUp: { moveToPreviousBlock(from: id) },
-                onArrowDown: { moveToNextBlock(from: id) },
+                onArrowUp: { _ in moveToPreviousBlock(from: id) },
+                onArrowDown: { _ in moveToNextBlock(from: id) },
                 onDeleteForwardAtEnd: { mergeNextBlock(id: id) }
             )
             Text(url.absoluteString)
@@ -335,7 +335,7 @@ struct BlockRowView: View {
                         items: items
                     )
                 },
-                onArrowUp: {
+                onArrowUp: { _ in
                     moveWithinList(
                         blockID: blockID,
                         itemID: item.id,
@@ -343,7 +343,7 @@ struct BlockRowView: View {
                         items: items
                     )
                 },
-                onArrowDown: {
+                onArrowDown: { _ in
                     moveWithinList(
                         blockID: blockID,
                         itemID: item.id,

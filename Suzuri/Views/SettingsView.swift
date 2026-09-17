@@ -24,7 +24,7 @@ struct SettingsView: View {
 
     private let tokenStore: TokenStore
 
-    init(sessionController: SessionController = SessionController()) {
+    init(sessionController: SessionController) {
         self.tokenStore = TokenStore()
         self._sessionController = State(initialValue: sessionController)
         self._serverManager = State(initialValue: sessionController.serverManager)
@@ -33,6 +33,11 @@ struct SettingsView: View {
         self._imagePassword = State(
             initialValue: TokenStore().loadString(ImageHostConfiguration.passwordKey) ?? ""
         )
+    }
+
+    @MainActor
+    init() {
+        self.init(sessionController: SessionController())
     }
 
     var body: some View {
