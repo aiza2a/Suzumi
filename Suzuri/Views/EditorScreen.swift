@@ -6,10 +6,11 @@ import SwiftUI
 /// 账号匿名注册，token 存 Keychain，重启仍在。
 /// D4 仅改视觉：`AppBackground` 背景、发布栏玻璃容器 + `AppGlassButton`、
 /// 大标题/作者胶囊样式；**不改 APIClient/Models/发布流程逻辑**。
+@MainActor
 struct EditorScreen: View {
     @State private var title: String = ""
     @State private var authorName: String = ""
-    @State private var bodyText: String = ""
+    @State private var document = BlockEditorDocument()
     @State private var isPublishing: Bool = false
     @State private var publishedURL: URL?
     @State private var errorMessage: String?
@@ -39,11 +40,10 @@ struct EditorScreen: View {
                         Divider()
                             .opacity(0.4)
 
-                        // 正文
-                        TextField("正文（空行分段）", text: $bodyText, axis: .vertical)
-                            .font(.body)
-                            .lineLimit(8...20)
-                            .textInputAutocapitalization(.sentences)
+                        // 正文：块编辑器负责拆分、聚焦与块类型切换。
+                        BlockEditorView()
+                            .frame(minHeight: 240, maxHeight: 480)
+                            .environment(document)
 
                         if let url = publishedURL {
                             AppGlassCard(cornerRadius: 20) {
@@ -116,8 +116,13 @@ struct EditorScreen: View {
     }
 
     private var hasContent: Bool {
-        !title.trimmingCharacters(in: .whitespaces).isEmpty ||
-        !bodyText.trimmingCharacters(in: .whitespaces).isEmpty
+        let bodyHasContent = document.blocks.contains { block in
+            if case .divider = block {
+                return true
+            }
+            return !block.isEmpty
+        }
+        return !title.trimmingCharacters(in: .whitespaces).isEmpty || bodyHasContent
     }
 
     private var canPublish: Bool {
@@ -136,6 +141,17 @@ struct EditorScreen: View {
         }
 
         do {
+            let nodes = BlockEncoder.nodesForPublishing(document.blocks)
+            let contentData: Data
+            do {
+                contentData = try JSONEncoder().encode(nodes)
+            } catch {
+                throw TelegraphError.invalidResponse
+            }
+            guard contentData.count <= BlockEncoder.maxContentBytes else {
+                throw TelegraphError.contentTooLarge(bytes: contentData.count)
+            }
+
             let baseURL = URL(string: "https://api.telegra.ph")!
             var client = APIClient(baseURL: baseURL, session: .shared, accessToken: nil)
 
@@ -155,28 +171,8 @@ struct EditorScreen: View {
                 client.accessToken = token
             }
 
-            // 2. 正文按空行拆为多个 <p> 段落；段落 trim 空则跳过。
-            let paragraphs = bodyText
-                .components(separatedBy: "\n\n")
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-
-            let nodes: [TelegraphNode] = paragraphs.map { para in
-                TelegraphNode(tag: "p", attrs: nil, children: [.text(para)])
-            }
-
-            // 3. JSONEncoder 序列化 → 字节数 > 65536 抛 .contentTooLarge。
-            let contentData: Data
-            do {
-                contentData = try JSONEncoder().encode(nodes)
-            } catch {
-                throw TelegraphError.invalidResponse
-            }
-            if contentData.count > 65_536 {
-                throw TelegraphError.contentTooLarge(bytes: contentData.count)
-            }
-
-            // 4. createPage：content 作为 JSON 字符串 query 参数。
+            // 2. 空段落过滤后保留完整块结构，并将其编码为 Telegraph Node。
+            // 3. createPage：content 作为 JSON 字符串 query 参数。
             let contentJSON = String(data: contentData, encoding: .utf8) ?? "[]"
             let params: [String: String] = [
                 "title": title,

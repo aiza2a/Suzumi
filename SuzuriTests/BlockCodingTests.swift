@@ -23,6 +23,36 @@ final class BlockCodingTests: XCTestCase {
         XCTAssertEqual(listTexts(nodes[1]), ["first"])
     }
 
+    func testBulletListRoundTrip() throws {
+        let block = Block.bulletList(
+            id: UUID(),
+            items: [ListItem(text: "one"), ListItem(text: "two")]
+        )
+        let node = try XCTUnwrap(BlockEncoder.encode(block))
+        let decoded = try XCTUnwrap(BlockDecoder.decode(node))
+
+        XCTAssertEqual(node.tag, "ul")
+        guard case let .bulletList(_, items) = decoded else {
+            return XCTFail("Expected bullet list")
+        }
+        XCTAssertEqual(items.map(\.text), ["one", "two"])
+    }
+
+    func testNumberedListRoundTrip() throws {
+        let block = Block.numberedList(
+            id: UUID(),
+            items: [ListItem(text: "first"), ListItem(text: "second")]
+        )
+        let node = try XCTUnwrap(BlockEncoder.encode(block))
+        let decoded = try XCTUnwrap(BlockDecoder.decode(node))
+
+        XCTAssertEqual(node.tag, "ol")
+        guard case let .numberedList(_, items) = decoded else {
+            return XCTFail("Expected numbered list")
+        }
+        XCTAssertEqual(items.map(\.text), ["first", "second"])
+    }
+
     func testFigureEncodesImageAndCaption() throws {
         let url = try XCTUnwrap(URL(string: "https://telegra.ph/file/image.jpg"))
         let node = try XCTUnwrap(
