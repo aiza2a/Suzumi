@@ -8,7 +8,7 @@ struct BlockEncoder {
     static let contentLimit = maxContentBytes
 
     static func encode(_ blocks: [Block]) -> [TelegraphNode] {
-        blocks.map(toNode)
+        blocks.compactMap(encode(_:))
     }
 
     static func encode(blocks: [Block]) -> [TelegraphNode] {
@@ -20,7 +20,7 @@ struct BlockEncoder {
     }
 
     static func toNodes(_ block: Block) -> [TelegraphNode] {
-        [toNode(block)]
+        encode(block).map { [$0] } ?? []
     }
 
     static func toNodes(blocks: [Block]) -> [TelegraphNode] {
@@ -32,10 +32,16 @@ struct BlockEncoder {
     }
 
     static func encode(_ block: Block) -> TelegraphNode? {
-        toNode(block)
+        makeNode(for: block)
     }
 
+    /// Compatibility API for callers that require one node for a block.
+    /// Use `encode`/`toNodes` when a block may intentionally produce no node.
     static func toNode(_ block: Block) -> TelegraphNode {
+        makeNode(for: block) ?? node(tag: "p", children: [])
+    }
+
+    private static func makeNode(for block: Block) -> TelegraphNode? {
         switch block {
         case let .paragraph(_, text):
             node(tag: "p", children: [.text(text)])
@@ -133,12 +139,14 @@ struct BlockEncoder {
         return node(tag: tag, children: children)
     }
 
-    private static func figureNode(imageURL: URL?, caption: String) -> TelegraphNode {
-        var children: [TelegraphNode.NodeChild] = []
-        if let imageURL {
-            let image = node(tag: "img", attrs: ["src": imageURL.absoluteString], children: [])
-            children.append(.node(image))
+    private static func figureNode(imageURL: URL?, caption: String) -> TelegraphNode? {
+        guard let imageURL else {
+            return caption.isEmpty ? nil : node(tag: "p", children: [.text(caption)])
         }
+
+        var children: [TelegraphNode.NodeChild] = []
+        let image = node(tag: "img", attrs: ["src": imageURL.absoluteString], children: [])
+        children.append(.node(image))
         if !caption.isEmpty {
             let figcaption = node(tag: "figcaption", children: [.text(caption)])
             children.append(.node(figcaption))

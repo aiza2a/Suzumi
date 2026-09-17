@@ -55,6 +55,23 @@ final class BlockCodingTests: XCTestCase {
         } ?? false)
     }
 
+    func testImagelessFigureWithCaptionDegradesToParagraph() throws {
+        let node = try XCTUnwrap(
+            BlockEncoder.toNodes([
+                .figure(id: UUID(), imageURL: nil, caption: "Caption")
+            ]).first
+        )
+        XCTAssertEqual(node.tag, "p")
+        XCTAssertEqual(text(from: node), "Caption")
+    }
+
+    func testImagelessEmptyFigureIsOmittedFromPublishingNodes() {
+        let nodes = BlockEncoder.nodesForPublishing([
+            .figure(id: UUID(), imageURL: nil, caption: "")
+        ])
+        XCTAssertTrue(nodes.isEmpty)
+    }
+
     func testOtherBlockTagsEncode() throws {
         let blocks: [Block] = [
             .quote(id: UUID(), text: "quote"),
