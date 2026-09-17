@@ -22,12 +22,16 @@ final class ServerManager {
         }
 
         var apiBase: String {
+            apiBase(using: .standard)
+        }
+
+        func apiBase(using defaults: UserDefaults) -> String {
             switch self {
             case .telegraph: "https://api.telegra.ph"
             case .graph: "https://api.graph.org"
             case .legraph: "https://api.legra.ph"
             case .custom:
-                UserDefaults.standard.string(forKey: ServerManager.customAPIKey)
+                defaults.string(forKey: ServerManager.customAPIKey)
                     ?? Mirror.telegraph.apiBase
             }
         }
@@ -60,12 +64,17 @@ final class ServerManager {
 
     /// 当前有效的 API 根地址。
     var apiBase: String {
-        current == .custom ? customAPIBase : current.apiBase
+        current == .custom ? customAPIBase : current.apiBase(using: defaults)
     }
 
     var apiURL: URL? {
         guard let url = URL(string: apiBase), isHTTPURL(url) else { return nil }
         return url
+    }
+
+    var configurationError: TelegraphError? {
+        guard current == .custom else { return nil }
+        return apiURL == nil ? .api(message: "自定义 API 地址无效") : nil
     }
 
     func reset() {
