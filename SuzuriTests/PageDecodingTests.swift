@@ -54,13 +54,38 @@ final class PageDecodingTests: XCTestCase {
 
         let page = try JSONDecoder().decode(Page.self, from: Data(json.utf8))
 
-        guard case let .paragraph(_, first) = try XCTUnwrap(page.content?.first),
-              case let .paragraph(_, second) = try XCTUnwrap(page.content?[1])
-        else {
-            return XCTFail("字符串 content 应转换为 paragraph nodes")
+        let firstNode = try XCTUnwrap(page.content?.first)
+        let secondNode = try XCTUnwrap(page.content?[1])
+        XCTAssertEqual(firstNode.tag, "p")
+        XCTAssertEqual(secondNode.tag, "p")
+        guard case let .text(firstText) = firstNode.children?.first else {
+            return XCTFail("Expected first text child")
         }
-        XCTAssertEqual(first, "第一段")
-        XCTAssertEqual(second, "第二段")
+        guard case let .text(secondText) = secondNode.children?.first else {
+            return XCTFail("Expected second text child")
+        }
+        XCTAssertEqual(firstText, "第一段")
+        XCTAssertEqual(secondText, "第二段")
+    }
+
+    func testPageDecodesMixedStringAndNodeContent() throws {
+        let json = #"""
+        {
+          "path":"mixed-content",
+          "url":"https://telegra.ph/mixed-content",
+          "title":"混合内容",
+          "description":"",
+          "content":["文字", {"tag":"hr"}],
+          "views":0,
+          "can_edit":false
+        }
+        """#
+
+        let page = try JSONDecoder().decode(Page.self, from: Data(json.utf8))
+        let content = try XCTUnwrap(page.content)
+        XCTAssertEqual(content.count, 2)
+        XCTAssertEqual(content[0].tag, "p")
+        XCTAssertEqual(content[1].tag, "hr")
     }
 
     func testPageDecodesCanEditFalse() throws {

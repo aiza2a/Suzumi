@@ -1,5 +1,19 @@
 import Foundation
 
+private enum PageContentElement: Decodable {
+    case node(TelegraphNode)
+    case text(String)
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let node = try? container.decode(TelegraphNode.self) {
+            self = .node(node)
+        } else {
+            self = .text(try container.decode(String.self))
+        }
+    }
+}
+
 /// 已发布文章的远端表示。
 struct Page: Codable, Identifiable, Hashable, Sendable {
     let path: String
@@ -96,12 +110,14 @@ struct Page: Codable, Identifiable, Hashable, Sendable {
         if try container.decodeNil(forKey: .content) {
             return nil
         }
-        if let nodes = try? container.decode([TelegraphNode].self, forKey: .content) {
-            return nodes
-        }
-        let strings = try container.decode([String].self, forKey: .content)
-        return strings.map {
-            TelegraphNode(tag: "p", attrs: nil, children: [.text($0)])
+        let elements = try container.decode([PageContentElement].self, forKey: .content)
+        return elements.map { element in
+            switch element {
+            case .node(let node):
+                return node
+            case .text(let value):
+                return TelegraphNode(tag: "p", attrs: nil, children: [.text(value)])
+            }
         }
     }
 
@@ -126,6 +142,9 @@ struct Page: Codable, Identifiable, Hashable, Sendable {
     /// Reuses a list response's edit permission when a detail response omits it.
     func preservingCanEdit(from original: Page?, fallback: Bool = false) -> Page {
         guard !hasCanEditField else { return self }
+        let inheritedPermission = original?.hasCanEditField == true
+            ? original?.canEdit ?? false
+            : fallback
         var page = Page(
             path: path,
             url: url,
@@ -136,9 +155,9 @@ struct Page: Codable, Identifiable, Hashable, Sendable {
             imageUrl: imageUrl,
             content: content,
             views: views,
-            canEdit: original?.canEdit ?? fallback
+            canEdit: inheritedPermission
         )
-        page.hasCanEditField = original?.hasCanEditField ?? fallback
+        page.hasCanEditField = original?.hasCanEditField == true || fallback
         return page
     }
 

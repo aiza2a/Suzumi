@@ -187,7 +187,7 @@ struct BlockDecoder {
             // Top-level text nodes are represented as paragraphs. Nested element children
             // would be flattened by the editor and therefore are not lossless.
             return node.children?.contains { child in
-                if case .node = child { return true }
+                if case .node(_) = child { return true }
                 return false
             } ?? false
         }
@@ -197,7 +197,7 @@ struct BlockDecoder {
              "blockquote", "aside", "pre", "code":
             // These Block cases retain text only; every nested element would be lost.
             return node.children?.contains { child in
-                if case .node = child { return true }
+                if case .node(_) = child { return true }
                 return false
             } ?? false
 
@@ -205,7 +205,7 @@ struct BlockDecoder {
             // These tags are only representable in their parent list/figure block.
             guard !isTopLevel else { return true }
             return node.children?.contains { child in
-                if case .node = child { return true }
+                if case .node(_) = child { return true }
                 return false
             } ?? false
 
@@ -224,7 +224,7 @@ struct BlockDecoder {
                   node.attrs?["href"].flatMap({ URL(string: $0) }) != nil
             else { return true }
             return node.children?.contains { child in
-                if case .node = child { return true }
+                if case .node(_) = child { return true }
                 return false
             } ?? false
 
