@@ -21,7 +21,7 @@ final class Draft: Identifiable {
         id: UUID = UUID(),
         title: String = "",
         blocksData: Data = Data(),
-        updatedAt: Date(),
+        updatedAt: Date = Date(),
         isPublished: Bool = false,
         pagePath: String? = nil,
         origin: String? = nil,
