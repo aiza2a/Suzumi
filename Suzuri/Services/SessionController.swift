@@ -18,6 +18,8 @@ final class SessionController {
     private var activeOrigin: String
     @ObservationIgnored
     private var accountTask: Task<APIClient, Error>?
+    @ObservationIgnored
+    private var accountTaskID: UUID?
 
     private(set) var accessToken: String?
     private(set) var shortName: String?
@@ -48,6 +50,9 @@ final class SessionController {
         self.tokenStore = tokenStore
         self.session = session
 
+        let defaultOrigin = TokenStore.origin(for: MirrorFallback.apiBase)
+        Self.migrateLegacyCredentials(tokenStore: tokenStore, defaultOrigin: defaultOrigin)
+
         let origin = TokenStore.origin(for: serverManager.apiBase)
         self.activeOrigin = origin
         self.accessToken = tokenStore.loadString(.accessToken, origin: origin)
@@ -70,13 +75,22 @@ final class SessionController {
             return
         }
 
+        let requestOrigin = activeOrigin
+        let requestToken = accessToken
         do {
             let client = try validatedClient()
             let account = try await AccountService(client: client).getAccountInfo()
-            guard currentOrigin == activeOrigin else { return }
-            apply(account, origin: activeOrigin)
+            guard requestOrigin == activeOrigin,
+                  requestOrigin == currentOrigin,
+                  requestToken == accessToken
+            else { return }
+            apply(account, origin: requestOrigin)
             isLoaded = true
         } catch {
+            guard requestOrigin == activeOrigin,
+                  requestOrigin == currentOrigin,
+                  requestToken == accessToken
+            else { return }
             let normalized = normalize(error)
             loadError = normalized
             let authenticationFailed = handleAuthenticationFailure(normalized)
@@ -125,6 +139,7 @@ final class SessionController {
 
         let origin = activeOrigin
         let registrationClient = try validatedClient()
+        let taskID = UUID()
         let task = Task { @MainActor [weak self] () throws -> APIClient in
             guard let self else {
                 throw TelegraphError.network(underlying: "session deallocated")
@@ -145,14 +160,21 @@ final class SessionController {
             self.isLoaded = true
             return self.makeClientWithoutSynchronization()
         }
+        accountTaskID = taskID
         accountTask = task
 
         do {
             let client = try await task.value
-            accountTask = nil
+            if accountTaskID == taskID {
+                accountTask = nil
+                accountTaskID = nil
+            }
             return client
         } catch {
-            accountTask = nil
+            if accountTaskID == taskID {
+                accountTask = nil
+                accountTaskID = nil
+            }
             throw error
         }
     }
@@ -227,6 +249,7 @@ final class SessionController {
 
         accountTask?.cancel()
         accountTask = nil
+        accountTaskID = nil
         activeOrigin = origin
         accessToken = tokenStore.loadString(.accessToken, origin: origin)
         shortName = tokenStore.loadString(.shortName, origin: origin)
@@ -275,6 +298,39 @@ final class SessionController {
         case .api, .contentTooLarge, .missingToken:
             false
         }
+    }
+
+    private static func migrateLegacyCredentials(
+        tokenStore: TokenStore,
+        defaultOrigin: String
+    ) {
+        migrateLegacy(
+            key: .accessToken,
+            tokenStore: tokenStore,
+            defaultOrigin: defaultOrigin
+        )
+        migrateLegacy(
+            key: .shortName,
+            tokenStore: tokenStore,
+            defaultOrigin: defaultOrigin
+        )
+    }
+
+    private static func migrateLegacy(
+        key: TokenStore.Key,
+        tokenStore: TokenStore,
+        defaultOrigin: String
+    ) {
+        let legacyAccount = key.rawValue
+        guard let legacyValue = tokenStore.loadString(legacyAccount) else { return }
+        if tokenStore.loadString(key, origin: defaultOrigin) == nil {
+            do {
+                try tokenStore.saveString(legacyValue, for: key, origin: defaultOrigin)
+            } catch {
+                return
+            }
+        }
+        tokenStore.delete(legacyAccount)
     }
 
     private enum MirrorFallback {
