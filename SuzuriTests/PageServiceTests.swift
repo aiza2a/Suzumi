@@ -178,6 +178,31 @@ final class PageServiceTests: XCTestCase {
         XCTAssertEqual(request.url?.path, "/createPage")
     }
 
+    func testBlockCreateOverloadDropsEmptyBlocksBeforeEncoding() async throws {
+        PageServiceMockURLProtocol.data = Data(#"{"ok":true,"result":PLACEHOLDER}"#.replacingOccurrences(of: "PLACEHOLDER", with: pageJSON).utf8)
+        let blocks: [Block] = [
+            .emptyParagraph(),
+            .paragraph(id: UUID(), text: "保留正文")
+        ]
+
+        _ = try await makeService().createPage(
+            title: "标题",
+            authorName: nil,
+            authorUrl: nil,
+            blocks: blocks
+        )
+
+        let request = try XCTUnwrap(PageServiceMockURLProtocol.lastRequest)
+        let content = try XCTUnwrap(formValue("content", from: request))
+        let nodes = try JSONDecoder().decode([TelegraphNode].self, from: Data(content.utf8))
+        XCTAssertEqual(nodes.count, 1)
+        XCTAssertEqual(nodes.first?.tag, "p")
+        guard case let .text(text) = try XCTUnwrap(nodes.first?.children?.first) else {
+            return XCTFail("应编码为正文节点")
+        }
+        XCTAssertEqual(text, "保留正文")
+    }
+
     func testContentOver64KiBThrowsBeforeNetworkRequest() async throws {
         let hugeNode = TelegraphNode(
             tag: "p",

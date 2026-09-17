@@ -83,6 +83,9 @@ struct ErrorPresenter {
               let codeToken = detail.dropFirst(5).split(separator: " ").first,
               let code = Int(String(codeToken))
         else { return false }
+        if code == 429 {
+            return false
+        }
         return (400..<500).contains(code)
     }
 

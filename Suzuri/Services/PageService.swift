@@ -77,7 +77,8 @@ struct PageService: Sendable {
         authorUrl: String?,
         blocks: [Block]
     ) async throws -> Page {
-        let contentData = try BlockEncoder.encodedData(for: blocks)
+        let nodes = BlockEncoder.nodesForPublishing(blocks)
+        let contentData = try encodedContent(nodes)
         return try await client.call(
             "editPage/\(path)",
             params: parameters(
@@ -97,7 +98,8 @@ struct PageService: Sendable {
         authorUrl: String?,
         blocks: [Block]
     ) async throws -> Page {
-        let contentData = try BlockEncoder.encodedData(for: blocks)
+        let nodes = BlockEncoder.nodesForPublishing(blocks)
+        let contentData = try encodedContent(nodes)
         return try await client.call(
             "createPage",
             params: parameters(

@@ -134,6 +134,30 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(query?.first(where: { $0.name == "access_token" })?.value, "token-xyz")
     }
 
+    func testOkWithoutResultThrowsInvalidResponse() async {
+        MockURLProtocol.data = Data(#"{"ok":true}"#.utf8)
+        do {
+            _ = try await makeClient().call("getAccountInfo", params: [:], as: TelegraphAccount.self)
+            XCTFail("ok=true 且缺少 result 应抛 invalidResponse")
+        } catch let error as TelegraphError {
+            XCTAssertEqual(error, .invalidResponse)
+        } catch {
+            XCTFail("应为 TelegraphError，实际为 \(error)")
+        }
+    }
+
+    func testErrorWithoutMessageThrowsInvalidResponse() async {
+        MockURLProtocol.data = Data(#"{"ok":false}"#.utf8)
+        do {
+            _ = try await makeClient().call("getAccountInfo", params: [:], as: TelegraphAccount.self)
+            XCTFail("ok=false 且缺少 error 应抛 invalidResponse")
+        } catch let error as TelegraphError {
+            XCTAssertEqual(error, .invalidResponse)
+        } catch {
+            XCTFail("应为 TelegraphError，实际为 \(error)")
+        }
+    }
+
     /// mock 返回坏 JSON → 抛 `.invalidResponse`
     func testThrowsInvalidResponseOnBadJSON() async {
         MockURLProtocol.data = Data("not-json".utf8)

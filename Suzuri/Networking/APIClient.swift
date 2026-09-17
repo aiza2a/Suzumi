@@ -81,10 +81,17 @@ struct APIClient: Sendable {
             throw TelegraphError.invalidResponse
         }
 
-        guard envelope.ok, let result = envelope.result else {
-            throw TelegraphError.api(message: envelope.error ?? "unknown")
+        if envelope.ok {
+            guard let result = envelope.result else {
+                throw TelegraphError.invalidResponse
+            }
+            return result
         }
-        return result
+
+        guard let error = envelope.error, !error.isEmpty else {
+            throw TelegraphError.invalidResponse
+        }
+        throw TelegraphError.api(message: error)
     }
 
     /// Encodes fields according to `application/x-www-form-urlencoded` rules.
