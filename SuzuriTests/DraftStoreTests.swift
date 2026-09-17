@@ -64,4 +64,35 @@ final class DraftStoreTests: XCTestCase {
         XCTAssertNil(store.load(id: first))
         XCTAssertEqual(store.load(id: second)?.title, "第二篇")
     }
+
+    func testSavingAnEditReopensAPublishedDraft() throws {
+        let store = DraftStore(inMemory: true)
+        let id = try store.createDraft(title: "已发布")
+        store.markPublished(id: id, pagePath: "page-path")
+
+        try store.saveNow(
+            id: id,
+            title: "已修改",
+            blocks: [.paragraph(id: UUID(), text: "新版本")]
+        )
+
+        XCTAssertFalse(try XCTUnwrap(store.load(id: id)).isPublished)
+        XCTAssertEqual(store.loadUnpublished(pagePath: "page-path")?.id, id)
+    }
+
+    func testDeleteClearsPendingDebouncedSnapshot() async throws {
+        let store = DraftStore(inMemory: true)
+        let id = UUID()
+        store.scheduleSave(
+            id: id,
+            title: "即将删除",
+            blocks: [.paragraph(id: UUID(), text: "内容")]
+        )
+        store.delete(id: id)
+        store.savePendingNow()
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+
+        XCTAssertNil(store.load(id: id))
+        XCTAssertEqual(store.saveCount, 0)
+    }
 }

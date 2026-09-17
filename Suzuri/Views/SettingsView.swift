@@ -203,8 +203,8 @@ struct SettingsView: View {
                 Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0")
                     .foregroundStyle(.secondary)
             }
-            Link(destination: URL(string: "https://github.com/" )!) {
-                Label("项目主页", systemImage: "link")
+            Link(destination: URL(string: "https://telegra.ph/api")!) {
+                Label("Telegraph API 文档", systemImage: "link")
             }
             HStack {
                 Text("开源许可")
@@ -291,6 +291,21 @@ enum ImageHostConfiguration {
     static let usernameKey = "image_basic_auth_username"
     static let passwordKey = "image_basic_auth_password"
     static let basicAuthKey = "image_basic_auth_enabled"
+
+    static func configurationError(
+        defaults: UserDefaults = .standard
+    ) -> TelegraphError? {
+        let provider = ImageProvider(
+            rawValue: defaults.string(forKey: providerKey) ?? ImageProvider.quax.rawValue
+        ) ?? .quax
+        guard provider != .quax else { return nil }
+        let configuredBaseURL = defaults.string(forKey: baseURLKey)
+            ?? TelegraphCompatHost.defaultBaseURL.absoluteString
+        guard let url = URL(string: configuredBaseURL), isHTTPURL(url) else {
+            return .api(message: "图床 baseURL 无效")
+        }
+        return nil
+    }
 
     static func makeUploadService(
         defaults: UserDefaults = .standard,

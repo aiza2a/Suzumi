@@ -61,6 +61,22 @@ final class PageServiceTests: XCTestCase {
         return PageService(client: client)
     }
 
+    private func formValue(_ name: String, from request: URLRequest) -> String? {
+        guard let body = request.httpBody,
+              let encoded = String(data: body, encoding: .utf8)
+        else { return nil }
+        for pair in encoded.split(separator: "&") {
+            let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+            guard parts.count == 2,
+                  parts[0].removingPercentEncoding == name
+            else { continue }
+            return parts[1]
+                .replacingOccurrences(of: "+", with: " ")
+                .removingPercentEncoding
+        }
+        return nil
+    }
+
     override func setUp() {
         super.setUp()
         PageServiceMockURLProtocol.data = nil
@@ -136,9 +152,12 @@ final class PageServiceTests: XCTestCase {
         let request = try XCTUnwrap(PageServiceMockURLProtocol.lastRequest)
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(request.url?.path, "/editPage/demo-page")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-www-form-urlencoded; charset=utf-8")
+        XCTAssertEqual(formValue("title", from: request), "新标题")
+        XCTAssertEqual(formValue("author_name", from: request), "作者")
+        XCTAssertTrue(formValue("content", from: request)?.contains("更新") == true)
         let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
-        XCTAssertEqual(query?.first(where: { $0.name == "title" })?.value, "新标题")
-        XCTAssertTrue(query?.contains(where: { $0.name == "content" && ($0.value ?? "").contains("更新") }) == true)
+        XCTAssertEqual(query?.first(where: { $0.name == "access_token" })?.value, "token")
     }
 
     func testCreatePageReturnsPage() async throws {
@@ -152,7 +171,11 @@ final class PageServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(page.url, "https://telegra.ph/demo-page")
-        XCTAssertEqual(PageServiceMockURLProtocol.lastRequest?.url?.path, "/createPage")
+        let request = try XCTUnwrap(PageServiceMockURLProtocol.lastRequest)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(formValue("title", from: request), "标题")
+        XCTAssertEqual(formValue("return_content", from: request), "true")
+        XCTAssertEqual(request.url?.path, "/createPage")
     }
 
     func testContentOver64KiBThrowsBeforeNetworkRequest() async throws {

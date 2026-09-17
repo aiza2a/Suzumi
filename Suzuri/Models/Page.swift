@@ -1,7 +1,7 @@
 import Foundation
 
 /// 已发布文章的远端表示。
-struct Page: Codable, Identifiable, Hashable {
+struct Page: Codable, Identifiable, Hashable, Sendable {
     let path: String
     let url: String
     let title: String
@@ -85,9 +85,8 @@ struct Page: Codable, Identifiable, Hashable {
         try container.encode(canEdit, forKey: .canEdit)
     }
 
-    /// Reuses a list response's edit permission when a detail response omits it.
-    func preservingCanEdit(from original: Page?) -> Page {
-        guard !hasCanEditField, let original else { return self }
+    /// Returns a copy with an explicit edit permission.
+    func withCanEdit(_ canEdit: Bool) -> Page {
         var page = Page(
             path: path,
             url: url,
@@ -98,9 +97,28 @@ struct Page: Codable, Identifiable, Hashable {
             imageUrl: imageUrl,
             content: content,
             views: views,
-            canEdit: original.canEdit
+            canEdit: canEdit
         )
-        page.hasCanEditField = original.hasCanEditField
+        page.hasCanEditField = true
+        return page
+    }
+
+    /// Reuses a list response's edit permission when a detail response omits it.
+    func preservingCanEdit(from original: Page?, fallback: Bool = false) -> Page {
+        guard !hasCanEditField else { return self }
+        var page = Page(
+            path: path,
+            url: url,
+            title: title,
+            description: description,
+            authorName: authorName,
+            authorUrl: authorUrl,
+            imageUrl: imageUrl,
+            content: content,
+            views: views,
+            canEdit: original?.canEdit ?? fallback
+        )
+        page.hasCanEditField = original?.hasCanEditField ?? false
         return page
     }
 
@@ -125,7 +143,7 @@ struct Page: Codable, Identifiable, Hashable {
 }
 
 /// `getPageList` 的远端结果。
-struct PageList: Codable, Equatable {
+struct PageList: Codable, Equatable, Sendable {
     let totalCount: Int
     let pages: [Page]
 

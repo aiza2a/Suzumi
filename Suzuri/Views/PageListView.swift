@@ -1,5 +1,10 @@
+import CryptoKit
 import SwiftUI
 import UIKit
+
+extension Notification.Name {
+    static let pageDidPublish = Notification.Name("Suzuri.pageDidPublish")
+}
 
 /// 草稿与已发布文章列表。
 @MainActor
@@ -10,6 +15,7 @@ struct PageListView: View {
     }
 
     private static let hiddenPagesKey = "locally_hidden_page_paths"
+    private static let cachedPagesKey = "cached_page_list"
     private let pageLimit = 50
     private let draftStore: DraftStore
 
@@ -21,7 +27,8 @@ struct PageListView: View {
     @State private var hiddenPagePaths: Set<String> = []
     @State private var totalPageCount = 0
     @State private var nextOffset = 0
-    @State private var hasMorePages = true
+    @State private var hasMorePages = false
+    @State private var requestGeneration = 0
     @State private var isLoading = false
     @State private var isInitialLoading = false
     @State private var hasLoaded = false
@@ -109,10 +116,10 @@ struct PageListView: View {
                                 }
                         }
 
-                        if isLoading && drafts.isEmpty && pages.isEmpty {
+                        if isLoading || isInitialLoading {
                             ProgressView("加载中…")
                                 .padding(.top, 48)
-                        } else if !isLoading && drafts.isEmpty && pages.isEmpty {
+                        } else if drafts.isEmpty && pages.isEmpty {
                             EmptyStateView(
                                 systemImage: "doc.text",
                                 title: "还没有文章",
@@ -177,6 +184,10 @@ struct PageListView: View {
                 guard !wasConnected, isConnected else { return }
                 Task { @MainActor in await reload() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .pageDidPublish)) { notification in
+                guard let page = notification.object as? Page else { return }
+                upsertPublishedPage(page)
+            }
             .alert("加载失败", isPresented: Binding(
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } }
@@ -206,22 +217,45 @@ struct PageListView: View {
 
     private func reload() async {
         guard !Task.isCancelled else { return }
+        requestGeneration += 1
+        let generation = requestGeneration
         isLoading = true
+        errorMessage = nil
         canRetryError = false
-        defer { isLoading = false }
+        defer {
+            if generation == requestGeneration {
+                isLoading = false
+            }
+        }
 
-        hiddenPagePaths = Set(UserDefaults.standard.stringArray(forKey: Self.hiddenPagesKey) ?? [])
+        hiddenPagePaths = Set(UserDefaults.standard.stringArray(forKey: scopedHiddenPagesKey) ?? [])
         drafts = draftStore.loadAll().filter { !$0.isPublished }
-        pages = []
-        nextOffset = 0
-        totalPageCount = 0
-        hasMorePages = false
+
+        // Published pages are cached so the list remains useful after relaunching offline.
+        if let cached = loadCachedPageList() {
+            let fetchedAt = Date()
+            for page in cached.pages {
+                pageLastSeen[page.path] = fetchedAt
+            }
+            pages = cached.pages.filter { !hiddenPagePaths.contains($0.path) }
+            nextOffset = cached.pages.count
+            totalPageCount = cached.totalCount
+            hasMorePages = sessionController.accessToken != nil
+                && nextOffset < totalPageCount
+        } else {
+            pages = []
+            nextOffset = 0
+            totalPageCount = 0
+            hasMorePages = false
+        }
 
         // The first anonymous screen remains usable without creating an account.
         guard sessionController.accessToken != nil else { return }
 
         do {
-            let result = try await pageService().getPageList(offset: 0, limit: pageLimit)
+            let service = try pageService()
+            let result = try await service.getPageList(offset: 0, limit: pageLimit)
+            guard generation == requestGeneration, !Task.isCancelled else { return }
             let fetchedAt = Date()
             for page in result.pages {
                 pageLastSeen[page.path] = fetchedAt
@@ -230,9 +264,17 @@ struct PageListView: View {
             totalPageCount = result.total
             nextOffset = result.pages.count
             hasMorePages = !result.pages.isEmpty && nextOffset < totalPageCount
+            saveCachedPageList(PageList(totalCount: result.total, pages: result.pages))
         } catch {
+            guard generation == requestGeneration, !Task.isCancelled else { return }
+            if sessionController.handleAuthenticationFailure(error) {
+                pages = []
+                totalPageCount = 0
+                nextOffset = 0
+            }
             errorMessage = ErrorPresenter.message(for: error)
             canRetryError = ErrorPresenter.isRetryable(error)
+            hasMorePages = false
         }
     }
 
@@ -243,10 +285,17 @@ struct PageListView: View {
               !Task.isCancelled
         else { return }
 
+        let generation = requestGeneration
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            if generation == requestGeneration {
+                isLoading = false
+            }
+        }
         do {
-            let result = try await pageService().getPageList(offset: nextOffset, limit: pageLimit)
+            let service = try pageService()
+            let result = try await service.getPageList(offset: nextOffset, limit: pageLimit)
+            guard generation == requestGeneration, !Task.isCancelled else { return }
             let fetchedAt = Date()
             for page in result.pages {
                 pageLastSeen[page.path] = fetchedAt
@@ -257,18 +306,69 @@ struct PageListView: View {
             totalPageCount = result.total
             nextOffset += result.pages.count
             hasMorePages = !result.pages.isEmpty && nextOffset < totalPageCount
+            saveAdditionalCachedPages(result.pages, total: result.total)
         } catch {
+            guard generation == requestGeneration, !Task.isCancelled else { return }
+            if sessionController.handleAuthenticationFailure(error) {
+                pages = []
+                totalPageCount = 0
+                nextOffset = 0
+            }
             errorMessage = ErrorPresenter.message(for: error)
             canRetryError = ErrorPresenter.isRetryable(error)
+            hasMorePages = false
         }
     }
 
-    private func pageService() -> PageService {
-        PageService(client: sessionController.makeClient())
+    private var scopeFingerprint: String {
+        let scope = "\(sessionController.serverManager.apiBase)|\(sessionController.accessToken ?? "anonymous")"
+        return SHA256.hash(data: Data(scope.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private var scopedCachedPagesKey: String {
+        "\(Self.cachedPagesKey).\(scopeFingerprint)"
+    }
+
+    private var scopedHiddenPagesKey: String {
+        "\(Self.hiddenPagesKey).\(scopeFingerprint)"
+    }
+
+    private func loadCachedPageList() -> PageList? {
+        guard let data = UserDefaults.standard.data(forKey: scopedCachedPagesKey),
+              let cached = try? JSONDecoder().decode(PageList.self, from: data)
+        else {
+            return nil
+        }
+        var pages = cached.pages
+        for index in pages.indices {
+            // A cached list came from a response that included the list permission field.
+            pages[index].hasCanEditField = true
+        }
+        return PageList(totalCount: cached.totalCount, pages: pages)
+    }
+
+    private func saveCachedPageList(_ pageList: PageList) {
+        guard let data = try? JSONEncoder().encode(pageList) else { return }
+        UserDefaults.standard.set(data, forKey: scopedCachedPagesKey)
+    }
+
+    private func saveAdditionalCachedPages(_ additionalPages: [Page], total: Int) {
+        var combined = loadCachedPageList()?.pages ?? []
+        let existingPaths = Set(combined.map(\.path))
+        combined.append(contentsOf: additionalPages.filter { !existingPaths.contains($0.path) })
+        saveCachedPageList(PageList(totalCount: total, pages: combined))
+    }
+
+    private func pageService() throws -> PageService {
+        PageService(client: try sessionController.validatedClient())
     }
 
     private func openPage(_ page: Page) {
-        let draftID = draftStore.loadUnpublished(pagePath: page.path)?.id
+        // Generate the destination's draft identity before navigation so view recreation
+        // cannot create a second local draft for the same editing session.
+        let draftID = draftStore.loadUnpublished(pagePath: page.path)?.id ?? UUID()
         path.append(.page(page, draftID: draftID))
     }
 
@@ -289,8 +389,26 @@ struct PageListView: View {
 
     private func hidePage(_ page: Page) {
         hiddenPagePaths.insert(page.path)
-        UserDefaults.standard.set(Array(hiddenPagePaths), forKey: Self.hiddenPagesKey)
+        UserDefaults.standard.set(Array(hiddenPagePaths), forKey: scopedHiddenPagesKey)
         pages.removeAll { $0.path == page.path }
+    }
+
+    private func upsertPublishedPage(_ page: Page) {
+        let now = Date()
+        pageLastSeen[page.path] = now
+        if hiddenPagePaths.contains(page.path) {
+            hiddenPagePaths.remove(page.path)
+            UserDefaults.standard.set(Array(hiddenPagePaths), forKey: scopedHiddenPagesKey)
+        }
+        if let index = pages.firstIndex(where: { $0.path == page.path }) {
+            pages[index] = page
+        } else {
+            pages.insert(page, at: 0)
+            totalPageCount = max(totalPageCount, pages.count)
+        }
+        let cachedPages = loadCachedPageList()?.pages ?? []
+        let withoutPage = cachedPages.filter { $0.path != page.path }
+        saveCachedPageList(PageList(totalCount: max(totalPageCount, withoutPage.count + 1), pages: [page] + withoutPage))
     }
 }
 

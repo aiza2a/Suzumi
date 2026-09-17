@@ -49,16 +49,12 @@ final class SessionController {
 
         guard accessToken != nil else { return }
         do {
-            let account = try await AccountService(client: makeClient()).getAccountInfo()
+            let client = try validatedClient()
+            let account = try await AccountService(client: client).getAccountInfo()
             apply(account)
-        } catch let error as TelegraphError {
-            if case .api(let message) = error,
-               message.uppercased().contains("ACCESS_TOKEN") {
-                clearLocalAccess()
-            }
-            // Temporary transport failures keep the local token for a later retry.
         } catch {
-            // Unknown validation failures do not block anonymous use.
+            handleAuthenticationFailure(error)
+            // Temporary transport failures keep the local token for a later retry.
         }
     }
 
@@ -66,6 +62,13 @@ final class SessionController {
     func makeClient() -> APIClient {
         let baseURL = serverManager.apiURL ?? URL(string: MirrorFallback.apiBase)!
         return APIClient(baseURL: baseURL, session: session, accessToken: accessToken)
+    }
+
+    func validatedClient() throws -> APIClient {
+        if let error = serverManager.configurationError {
+            throw error
+        }
+        return makeClient()
     }
 
     /// Returns a client for an arbitrary mirror, useful for previews and tests.
@@ -77,12 +80,13 @@ final class SessionController {
     /// 首次发布时才创建匿名账号，并把 token 保存到 Keychain。
     func ensureAccount() async throws -> APIClient {
         if accessToken != nil {
-            return makeClient()
+            return try validatedClient()
         }
 
         isLoading = true
         defer { isLoading = false }
-        let account = try await AccountService(client: makeClient()).createAccount()
+        let client = try validatedClient()
+        let account = try await AccountService(client: client).createAccount()
         guard let token = account.accessToken, !token.isEmpty else {
             throw TelegraphError.missingToken
         }
@@ -120,13 +124,41 @@ final class SessionController {
     /// 撤销当前 token；成功后清除本地身份，下次发布会重新注册。
     func revokeAccess() async throws {
         if accessToken != nil {
-            _ = try await makeClient().call(
-                "revokeAccessToken",
-                params: [:],
-                as: TelegraphAccount.self
-            )
+            do {
+                _ = try await validatedClient().call(
+                    "revokeAccessToken",
+                    params: [:],
+                    as: TelegraphAccount.self
+                )
+            } catch {
+                handleAuthenticationFailure(error)
+                throw error
+            }
         }
         clearLocalAccess()
+    }
+
+    /// Clears credentials after an explicit authentication failure.
+    @discardableResult
+    func handleAuthenticationFailure(_ error: Error) -> Bool {
+        let isAuthenticationFailure: Bool
+        if let error = error as? TelegraphError {
+            switch error {
+            case .api(let message):
+                isAuthenticationFailure = message.uppercased().contains("ACCESS_TOKEN")
+            case .network(let detail):
+                isAuthenticationFailure = detail.contains("HTTP 401") || detail.contains("HTTP 403")
+            default:
+                isAuthenticationFailure = false
+            }
+        } else {
+            isAuthenticationFailure = false
+        }
+
+        if isAuthenticationFailure {
+            clearLocalAccess()
+        }
+        return isAuthenticationFailure
     }
 
     private func clearLocalAccess() {

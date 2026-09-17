@@ -3,7 +3,7 @@ import Foundation
 /// Telegraph 账号。
 ///
 /// 字段映射采用 snake_case 命名（telegraph API 约定）。
-struct TelegraphAccount: Codable, Equatable {
+struct TelegraphAccount: Codable, Equatable, Sendable {
     let shortName: String?
     let authorName: String?
     let authorUrl: String?

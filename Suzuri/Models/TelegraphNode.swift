@@ -6,7 +6,7 @@ import Foundation
 /// 也可以是元素节点 (`NodeElement`)。这里用一个 `NodeChild` 枚举表达，
 /// 编解码采用 `singleValueContainer` 先试 object 再回退 string 的写法
 /// （参考 dp5a/Telegraph）。
-struct TelegraphNode: Codable, Equatable {
+struct TelegraphNode: Codable, Equatable, Sendable {
     /// DOM 元素标签，如 "p" / "h3" / "figure"。文本节点没有该字段。
     var tag: String?
     /// 元素属性，如 ["src": "https://..."]。
@@ -15,7 +15,7 @@ struct TelegraphNode: Codable, Equatable {
     var children: [NodeChild]?
 
     /// 二态子节点：文本节点或嵌套元素节点。
-    enum NodeChild: Codable, Equatable {
+    enum NodeChild: Codable, Equatable, Sendable {
         case text(String)
         case node(TelegraphNode)
 

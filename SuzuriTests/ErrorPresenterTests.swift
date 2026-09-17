@@ -17,6 +17,12 @@ final class ErrorPresenterTests: XCTestCase {
         XCTAssertTrue(ErrorPresenter.isRetryable(error))
     }
 
+    func testUnauthorizedHTTPErrorIsNotRetryable() {
+        let error = TelegraphError.network(underlying: "HTTP 401")
+
+        XCTAssertFalse(ErrorPresenter.isRetryable(error))
+    }
+
     func testContentTooLargeIsNotRetryable() {
         let error = TelegraphError.contentTooLarge(bytes: 70_000)
         let presenter = ErrorPresenter(error: error)

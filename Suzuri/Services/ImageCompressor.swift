@@ -1,7 +1,7 @@
 import UIKit
 
 /// 图片压缩错误。
-enum ImageCompressorError: Error, Equatable {
+enum ImageCompressorError: Error, Equatable, Sendable {
     case unreadable
 }
 

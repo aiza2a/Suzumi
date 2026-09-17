@@ -63,6 +63,31 @@ final class PageDecodingTests: XCTestCase {
         XCTAssertNil(page.content)
     }
 
+    func testMissingCanEditFieldCanReuseListPermission() throws {
+        let json = #"""
+        {
+          "path":"detail",
+          "url":"https://telegra.ph/detail",
+          "title":"详情",
+          "description":"",
+          "views":0
+        }
+        """#
+        let detail = try JSONDecoder().decode(Page.self, from: Data(json.utf8))
+        let listPage = Page(
+            path: "detail",
+            url: "https://telegra.ph/detail",
+            title: "详情",
+            description: "",
+            canEdit: true
+        )
+
+        let preserved = detail.preservingCanEdit(from: listPage)
+
+        XCTAssertFalse(detail.hasCanEditField)
+        XCTAssertTrue(preserved.canEdit)
+    }
+
     func testPageEncodingUsesSnakeCaseKeys() throws {
         let page = Page(
             path: "p",

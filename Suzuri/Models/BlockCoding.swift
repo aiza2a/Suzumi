@@ -174,6 +174,50 @@ struct BlockDecoder {
         decode(nodes)
     }
 
+    /// Returns true when decoding would drop a structural node on republish.
+    static func containsUnsupportedNodes(_ nodes: [TelegraphNode]) -> Bool {
+        nodes.contains { containsUnsupportedNode($0) }
+    }
+
+    private static let structuralTags: Set<String> = [
+        "p", "h1", "h2", "h3", "h4", "h5", "h6",
+        "ul", "ol", "li", "blockquote", "aside", "pre", "code",
+        "hr", "figure", "img", "figcaption", "a"
+    ]
+
+    private static let inlineTags: Set<String> = [
+        "a", "b", "strong", "i", "em", "u", "s", "del", "ins",
+        "code", "br", "mark", "small", "sup", "sub"
+    ]
+
+    private static func containsUnsupportedNode(
+        _ node: TelegraphNode,
+        allowingInline: Bool = false
+    ) -> Bool {
+        guard let tag = node.tag?.lowercased() else {
+            return node.children?.contains {
+                if case let .node(child) = $0 {
+                    return containsUnsupportedNode(child, allowingInline: allowingInline)
+                }
+                return false
+            } ?? false
+        }
+        guard structuralTags.contains(tag) || (allowingInline && inlineTags.contains(tag)) else {
+            return true
+        }
+
+        let childAllowsInline = allowingInline || [
+            "p", "h1", "h2", "h3", "h4", "h5", "h6",
+            "li", "blockquote", "aside", "pre", "figcaption", "a"
+        ].contains(tag)
+        return node.children?.contains {
+            if case let .node(child) = $0 {
+                return containsUnsupportedNode(child, allowingInline: childAllowsInline)
+            }
+            return false
+        } ?? false
+    }
+
     static func decode(_ node: TelegraphNode) -> Block? {
         let tag = node.tag?.lowercased()
         switch tag {

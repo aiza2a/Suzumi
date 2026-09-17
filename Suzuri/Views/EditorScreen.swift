@@ -2,13 +2,13 @@ import SwiftUI
 
 /// 文章编辑与发布界面。
 ///
-/// 正文仍保留现有编辑入口；D5 负责草稿生命周期、已发布页回填、图片上传和发布分流。
+/// D5 保留页面/草稿/会话生命周期；D3 的 `BlockEditorDocument` 是正文唯一数据源。
 @MainActor
 struct EditorScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
-    private let draftID: UUID
+    @State private var draftID: UUID
     private let draftStore: DraftStore
     /// Optional test injection; production creates the pipeline from current settings per upload.
     private let injectedImagePipeline: ImagePipeline?
@@ -16,17 +16,20 @@ struct EditorScreen: View {
     @State private var sessionController: SessionController
     @State private var reachability = Reachability()
     @State private var currentPage: Page?
+    @State private var targetPagePath: String?
+    @State private var document: BlockEditorDocument
     @State private var title: String
     @State private var authorName: String
-    @State private var bodyText: String
-    @State private var blocks: [Block]
-    @State private var usesStructuredBlocks: Bool
     @State private var isPublishing = false
+    @State private var isPickingImage = false
     @State private var isUploadingImage = false
     @State private var isLoadingPage = false
     @State private var isHydrating = true
     @State private var publishedURL: URL?
     @State private var errorMessage: String?
+    @State private var isPageLoadError = false
+    @State private var remoteEditUnavailable = false
+    @State private var hasUnsupportedContent = false
     @State private var isUnpublishedDraft = false
     @State private var hasUnsavedChanges = false
     @State private var isShowingExitConfirmation = false
@@ -50,16 +53,18 @@ struct EditorScreen: View {
             initialBlocks = [.emptyParagraph()]
         }
 
-        self.draftID = draftID ?? UUID()
+        self._draftID = State(initialValue: draftID ?? UUID())
         self.draftStore = draftStore
         self.injectedImagePipeline = imagePipeline
         self._sessionController = State(initialValue: sessionController)
         self._currentPage = State(initialValue: page)
+        self._targetPagePath = State(initialValue: page?.path)
+        self._hasUnsupportedContent = State(
+            initialValue: page?.content.map { BlockDecoder.containsUnsupportedNodes($0) } ?? false
+        )
+        self._document = State(initialValue: BlockEditorDocument(blocks: initialBlocks))
         self._title = State(initialValue: page?.title ?? "")
         self._authorName = State(initialValue: page?.authorName ?? sessionController.authorName ?? "")
-        self._blocks = State(initialValue: initialBlocks)
-        self._bodyText = State(initialValue: Self.plainText(from: initialBlocks))
-        self._usesStructuredBlocks = State(initialValue: page?.content?.isEmpty == false)
     }
 
     var body: some View {
@@ -81,23 +86,22 @@ struct EditorScreen: View {
                             .font(.largeTitle.weight(.bold))
                             .textInputAutocapitalization(.sentences)
                             .submitLabel(.next)
-                            .disabled(!canEdit)
+                            .disabled(!canEdit || isHydrating || isPublishing)
 
                         TextField("作者名（可选）", text: $authorName)
                             .font(.subheadline)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                             .appGlass(cornerRadius: 999)
-                            .disabled(!canEdit)
+                            .disabled(!canEdit || isHydrating || isPublishing)
 
                         Divider()
                             .opacity(0.4)
 
-                        TextField("正文（空行分段）", text: $bodyText, axis: .vertical)
-                            .font(.body)
-                            .lineLimit(8...20)
-                            .textInputAutocapitalization(.sentences)
-                            .disabled(!canEdit)
+                        // D3 block editor owns all structured text, lists, figures, and focus state.
+                        BlockEditorView(isEditable: canEdit && !isHydrating && !isPublishing)
+                            .frame(minHeight: 240, maxHeight: 480)
+                            .environment(document)
 
                         if let imageProviderMessage {
                             Label(imageProviderMessage, systemImage: "checkmark.circle")
@@ -105,8 +109,14 @@ struct EditorScreen: View {
                                 .foregroundStyle(.secondary)
                         }
 
+                        if hasUnsupportedContent {
+                            Label("页面包含暂不支持的内容，发布前请在浏览器中编辑", systemImage: "exclamationmark.triangle")
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                        }
+
                         if let currentPage, !currentPage.canEdit,
-                           let url = URL(string: currentPage.url) {
+                           let url = browserURL(for: currentPage) {
                             Link(destination: url) {
                                 Label("在浏览器打开", systemImage: "safari")
                                     .font(.subheadline.weight(.semibold))
@@ -175,21 +185,16 @@ struct EditorScreen: View {
             .onChange(of: title) { _, _ in
                 markChangedAndScheduleSave()
             }
-            .onChange(of: authorName) { _, _ in
+            .onChange(of: authorName) { _, newValue in
                 markChangedAndScheduleSave()
-            }
-            .onChange(of: bodyText) { _, newValue in
-                if !isHydrating && usesStructuredBlocks {
-                    let imageBlocks = blocks.filter { block in
-                        if case .figure = block { return true }
-                        return false
-                    }
-                    blocks = Self.paragraphBlocks(from: newValue) + imageBlocks
-                    usesStructuredBlocks = false
+                if !isHydrating {
+                    try? sessionController.updateAuthorProfile(
+                        name: newValue,
+                        url: sessionController.authorURL
+                    )
                 }
-                markChangedAndScheduleSave()
             }
-            .onChange(of: blocks) { _, _ in
+            .onChange(of: document.blocks) { _, _ in
                 markChangedAndScheduleSave()
             }
             .onChange(of: scenePhase) { _, newPhase in
@@ -199,13 +204,13 @@ struct EditorScreen: View {
             }
             .onChange(of: reachability.isConnected) { wasConnected, isConnected in
                 guard !wasConnected, isConnected,
-                      let page = currentPage,
-                      page.content == nil
+                      let path = editPath,
+                      isPageLoadError || currentPage?.content == nil
                 else { return }
                 Task { @MainActor in
                     await refreshPage(
-                        path: page.path,
-                        preserveLocalDraft: draftStore.loadUnpublished(pagePath: page.path) != nil
+                        path: path,
+                        preserveLocalDraft: draftStore.loadUnpublished(pagePath: path) != nil
                     )
                 }
             }
@@ -235,13 +240,23 @@ struct EditorScreen: View {
             } message: {
                 Text(imageUploadErrorMessage ?? "")
             }
-            .alert("发布失败", isPresented: Binding(
+            .alert(isPageLoadError ? "加载失败" : "发布失败", isPresented: Binding(
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } }
             )) {
                 if canRetryError {
                     Button("重试") {
-                        Task { @MainActor in await publish() }
+                        Task { @MainActor in
+                            if isPageLoadError, let path = editPath {
+                                remoteEditUnavailable = false
+                                await refreshPage(
+                                    path: path,
+                                    preserveLocalDraft: draftStore.loadUnpublished(pagePath: path) != nil
+                                )
+                            } else {
+                                await publish()
+                            }
+                        }
                     }
                 }
                 Button("好", role: .cancel) { errorMessage = nil }
@@ -276,9 +291,12 @@ struct EditorScreen: View {
                     onError: { error in
                         imageUploadErrorMessage = ErrorPresenter.message(for: error)
                         retryImageData = nil
+                    },
+                    onLoadingChanged: { isLoading in
+                        isPickingImage = isLoading
                     }
                 )
-                .disabled(isPublishing)
+                .disabled(isPublishing || isHydrating || isPickingImage)
                 .frame(maxWidth: .infinity)
             }
 
@@ -305,20 +323,37 @@ struct EditorScreen: View {
     }
 
     private var hasContent: Bool {
-        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || blocks.contains { !$0.isEmpty }
+        document.blocks.contains { block in
+            if case .divider = block {
+                return true
+            }
+            return !block.isEmpty
+        } || !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var canEdit: Bool {
-        currentPage?.canEdit ?? true
+        guard !remoteEditUnavailable,
+              currentPage?.canEdit ?? true
+        else { return false }
+        guard let path = editPath else { return true }
+        guard sessionController.accessToken != nil else { return false }
+        return currentPage?.content != nil || draftStore.loadUnpublished(pagePath: path) != nil
     }
 
     private var canPublish: Bool {
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !isPublishing
             && !isUploadingImage
+            && !isPickingImage
+            && !isHydrating
+            && !isLoadingPage
+            && !hasUnsupportedContent
+            && (!isPageLoadError || currentPage?.content != nil)
             && canEdit
+    }
+
+    private var editPath: String? {
+        currentPage?.path ?? targetPagePath
     }
 
     private var shouldConfirmExit: Bool {
@@ -333,78 +368,73 @@ struct EditorScreen: View {
         }
     }
 
-    /// 当前 D4 正文入口使用字符串；图片块仍以 Block 保留在同一发布内容中。
-    private var blocksForPublishing: [Block] {
-        let paragraphs = Self.paragraphBlocks(from: bodyText)
-        let imageBlocks = blocks.filter { block in
-            if case .figure = block { return true }
-            return false
+    private func browserURL(for page: Page) -> URL? {
+        if let url = URL(string: page.url), isHTTPURL(url) {
+            return url
         }
-
-        // When a page was decoded by the block editor, preserve its structure.
-        if usesStructuredBlocks {
-            return blocks
-        }
-        return paragraphs + imageBlocks
+        return URL(string: "https://telegra.ph/\(page.path)")
     }
 
     private func markChangedAndScheduleSave() {
-        guard !isHydrating else { return }
+        guard !isHydrating, !isPublishing, canEdit else { return }
+        let isFirstChange = !hasUnsavedChanges
         hasUnsavedChanges = true
         isUnpublishedDraft = true
+        if isFirstChange {
+            try? draftStore.saveNow(
+                id: draftID,
+                title: title,
+                blocks: document.blocks
+            )
+            if let targetPagePath {
+                draftStore.setPagePath(id: draftID, pagePath: targetPagePath)
+            }
+        }
         scheduleDraftSaveIfNeeded()
     }
 
     private func saveDraftNow() {
-        guard !isHydrating, canEdit else { return }
+        guard !isHydrating, canEdit,
+              isUnpublishedDraft || hasUnsavedChanges
+        else { return }
         try? draftStore.saveNow(
             id: draftID,
             title: title,
-            blocks: blocksForPublishing
+            blocks: document.blocks
         )
     }
 
     private func scheduleDraftSaveIfNeeded() {
-        guard !isHydrating else { return }
+        guard !isHydrating, canEdit else { return }
         draftStore.scheduleSave(
             id: draftID,
             title: title,
-            blocks: blocksForPublishing
+            blocks: document.blocks
         )
     }
 
     private func loadInitialContent() async {
         isHydrating = true
         hasUnsavedChanges = false
+        await sessionController.load()
         let existingDraft = draftStore.load(id: draftID)
-        isUnpublishedDraft = existingDraft?.isPublished == false
+        targetPagePath = existingDraft?.pagePath ?? currentPage?.path
+        isUnpublishedDraft = existingDraft.map { !$0.isPublished } ?? false
 
-        if let existingDraft {
-            title = existingDraft.title
-            if let savedBlocks = try? JSONDecoder().decode([Block].self, from: existingDraft.blocksData),
-               !savedBlocks.isEmpty {
-                blocks = savedBlocks
-                bodyText = Self.plainText(from: savedBlocks)
-                usesStructuredBlocks = existingDraft.pagePath != nil
-                    || savedBlocks.contains { block in
-                        if case .paragraph = block {
-                            return false
-                        }
-                        return true
-                    }
-            }
+        if let existingDraft,
+           let savedBlocks = try? JSONDecoder().decode([Block].self, from: existingDraft.blocksData),
+           !savedBlocks.isEmpty {
+            document.blocks = savedBlocks
         }
 
         if let page = currentPage {
-            if page.canEdit, existingDraft == nil {
-                let initial = blocksForPublishing
-                try? draftStore.saveNow(id: draftID, title: title, blocks: initial)
-                draftStore.setPagePath(id: draftID, pagePath: page.path)
-                isUnpublishedDraft = true
-            }
             await refreshPage(path: page.path, preserveLocalDraft: existingDraft != nil)
+        } else if let path = existingDraft?.pagePath {
+            // A draft opened from the draft section can still be an edit of a remote page.
+            await refreshPage(path: path, preserveLocalDraft: true)
         } else if existingDraft == nil {
-            try? draftStore.saveNow(id: draftID, title: title, blocks: blocksForPublishing)
+            // Do not seed an editable page draft until its remote content has hydrated.
+            try? draftStore.saveNow(id: draftID, title: title, blocks: document.blocks)
             isUnpublishedDraft = true
         }
 
@@ -417,45 +447,80 @@ struct EditorScreen: View {
 
         do {
             let originalPage = currentPage
-            let fetchedPage = try await PageService(client: sessionController.makeClient())
+            let client = try sessionController.validatedClient()
+            var fetchedPage = try await PageService(client: client)
                 .getPage(path: path, returnContent: true)
-            let remotePage = fetchedPage.preservingCanEdit(from: originalPage)
+            if fetchedPage.content == nil, originalPage?.content == nil {
+                throw TelegraphError.invalidResponse
+            }
+            if fetchedPage.content == nil, let cachedContent = originalPage?.content {
+                fetchedPage.content = cachedContent
+            }
+            hasUnsupportedContent = fetchedPage.content.map {
+                BlockDecoder.containsUnsupportedNodes($0)
+            } ?? false
+            let permissionSource = sessionController.accessToken != nil
+                && originalPage?.hasCanEditField == true
+                ? originalPage
+                : nil
+            let remotePage = fetchedPage.preservingCanEdit(
+                from: permissionSource,
+                fallback: sessionController.accessToken != nil
+                    && preserveLocalDraft
+                    && targetPagePath != nil
+            )
             currentPage = remotePage
+            targetPagePath = remotePage.path
+            errorMessage = nil
+            canRetryError = false
+            isPageLoadError = false
+
             if !preserveLocalDraft {
                 title = remotePage.title
-                authorName = remotePage.authorName ?? ""
+                authorName = remotePage.authorName ?? sessionController.authorName ?? ""
                 if let content = remotePage.content {
                     let decoded = BlockDecoder.decode(content)
                     if !decoded.isEmpty {
-                        blocks = decoded
-                        bodyText = Self.plainText(from: decoded)
-                        usesStructuredBlocks = true
+                        document.blocks = decoded
                     }
                 }
-                try? draftStore.saveNow(id: draftID, title: title, blocks: blocksForPublishing)
-                draftStore.setPagePath(id: draftID, pagePath: remotePage.path)
             }
         } catch {
-            // Cached content remains usable. Only surface the error when there is no cache.
-            if currentPage?.content == nil {
-                errorMessage = ErrorPresenter.message(for: error)
-                canRetryError = ErrorPresenter.isRetryable(error)
+            // Cached content remains usable. Surface a retry without turning it into publish.
+            if sessionController.handleAuthenticationFailure(error), editPath != nil {
+                remoteEditUnavailable = true
+                currentPage = currentPage?.withCanEdit(false)
             }
+            errorMessage = ErrorPresenter.message(for: error)
+            canRetryError = ErrorPresenter.isRetryable(error)
+            isPageLoadError = true
         }
     }
 
-    /// 统一执行压缩、缓存和上传；成功后把图片块追加到待发布内容。
+    /// 统一执行压缩、缓存和上传；成功后把图片块插入当前焦点之后。
     private func uploadImage(_ sourceData: Data) async {
+        guard canEdit, !isHydrating, !isPublishing else { return }
         isUploadingImage = true
         imageUploadErrorMessage = nil
         retryImageData = nil
         defer { isUploadingImage = false }
 
         do {
+            if injectedImagePipeline == nil,
+               let configurationError = ImageHostConfiguration.configurationError() {
+                throw configurationError
+            }
             let pipeline = injectedImagePipeline
                 ?? ImagePipeline(uploadService: ImageHostConfiguration.makeUploadService())
             let result = try await pipeline.processAndUpload(sourceData)
-            blocks.append(.figure(id: UUID(), imageURL: result.url, caption: ""))
+            let imageBlock = Block.figure(id: UUID(), imageURL: result.url, caption: "")
+            if let focusedID = document.focusedBlockID,
+               let index = document.index(of: focusedID) {
+                document.insertBlock(imageBlock, at: index + 1)
+            } else {
+                document.blocks.append(imageBlock)
+            }
+            try? draftStore.saveNow(id: draftID, title: title, blocks: document.blocks)
             imageProviderMessage = "图片已上传（\(result.providerID)）"
         } catch {
             retryImageData = sourceData
@@ -468,11 +533,14 @@ struct EditorScreen: View {
         guard canPublish else { return }
         isPublishing = true
         errorMessage = nil
+        isPageLoadError = false
         canRetryError = false
         defer { isPublishing = false }
 
         do {
-            let contentBlocks = blocksForPublishing
+            let contentBlocks = document.blocks
+            // Persist the failed publish as a local draft, but reject oversized content before
+            // account creation so an invalid first publish does not create an unused account.
             try? draftStore.saveNow(id: draftID, title: title, blocks: contentBlocks)
             let nodes = BlockEncoder.nodesForPublishing(contentBlocks)
             try BlockEncoder.validateSize(of: nodes)
@@ -480,22 +548,29 @@ struct EditorScreen: View {
             let service = PageService(client: client)
             let result: Page
 
-            if let currentPage {
+            if let path = editPath {
+                guard currentPage?.content != nil else {
+                    throw TelegraphError.invalidResponse
+                }
                 let response = try await service.editPage(
-                    path: currentPage.path,
+                    path: path,
                     title: title,
                     authorName: optionalValue(authorName),
-                    authorUrl: sessionController.authorURL,
+                    authorUrl: sessionController.authorURL ?? currentPage?.authorUrl,
                     content: nodes
                 )
-                result = response.preservingCanEdit(from: currentPage)
+                result = response.preservingCanEdit(
+                    from: currentPage?.hasCanEditField == true ? currentPage : nil,
+                    fallback: true
+                )
             } else {
-                result = try await service.createPage(
+                let created = try await service.createPage(
                     title: title,
                     authorName: optionalValue(authorName),
                     authorUrl: sessionController.authorURL,
                     content: nodes
                 )
+                result = created.hasCanEditField ? created : created.withCanEdit(true)
             }
 
             guard let url = URL(string: result.url), isHTTPURL(url) else {
@@ -503,13 +578,19 @@ struct EditorScreen: View {
             }
             try? draftStore.saveNow(id: draftID, title: title, blocks: contentBlocks)
             currentPage = result
+            targetPagePath = result.path
             draftStore.markPublished(id: draftID, pagePath: result.path)
             isUnpublishedDraft = false
             hasUnsavedChanges = false
             withAnimation(AppAnimation.listInsert) {
                 publishedURL = url
             }
+            NotificationCenter.default.post(name: .pageDidPublish, object: result)
         } catch {
+            if sessionController.handleAuthenticationFailure(error), editPath != nil {
+                remoteEditUnavailable = true
+                currentPage = currentPage?.withCanEdit(false)
+            }
             errorMessage = ErrorPresenter.message(for: error)
             canRetryError = ErrorPresenter.isRetryable(error)
         }
@@ -518,30 +599,6 @@ struct EditorScreen: View {
     private func optionalValue(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func paragraphBlocks(from text: String) -> [Block] {
-        text
-            .components(separatedBy: "\n\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .map { Block.paragraph(id: UUID(), text: $0) }
-    }
-
-    private static func plainText(from blocks: [Block]) -> String {
-        blocks.compactMap { block in
-            switch block {
-            case let .paragraph(_, text), let .heading(_, _, text),
-                 let .quote(_, text), let .code(_, text), let .link(_, text, _):
-                return text.isEmpty ? nil : text
-            case let .bulletList(_, items), let .numberedList(_, items):
-                let text = items.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n")
-                return text.isEmpty ? nil : text
-            case .divider, .figure:
-                return nil
-            }
-        }
-        .joined(separator: "\n\n")
     }
 }
 

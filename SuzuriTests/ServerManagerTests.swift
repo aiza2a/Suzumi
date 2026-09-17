@@ -35,6 +35,7 @@ final class ServerManagerTests: XCTestCase {
         let restored = ServerManager(defaults: defaults)
         XCTAssertEqual(restored.current, .custom)
         XCTAssertEqual(restored.apiBase, "https://api.example.test")
+        XCTAssertEqual(restored.current.apiBase(using: defaults), "https://api.example.test")
         XCTAssertEqual(restored.apiURL?.host, "api.example.test")
     }
 

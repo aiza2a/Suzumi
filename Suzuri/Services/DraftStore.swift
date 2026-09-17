@@ -51,6 +51,7 @@ final class DraftStore {
         }
         draft.title = title
         draft.blocksData = data
+        draft.isPublished = false
         draft.updatedAt = .now
         try modelContext.save()
         saveCount += 1
@@ -130,6 +131,7 @@ final class DraftStore {
     func delete(id: UUID) {
         debounceTasks[id]?.cancel()
         debounceTasks[id] = nil
+        pendingSaves[id] = nil
         guard let draft = load(id: id) else { return }
         modelContext.delete(draft)
         try? modelContext.save()

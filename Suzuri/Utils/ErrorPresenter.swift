@@ -13,7 +13,7 @@ struct ErrorPresenter {
     }
 
     static func title(for error: Error) -> String {
-        if error is HostError || error is ImageCompressorError || error is ImagePipelineError {
+        if error is HostError || error is ImageCompressorError || error is ImagePipelineError || error is PhotoPickerError {
             return "图片处理失败"
         }
         if let error = error as? TelegraphError {
@@ -44,6 +44,8 @@ struct ErrorPresenter {
             }
         case is ImageCompressorError:
             return "无法读取或压缩这张图片。"
+        case is PhotoPickerError:
+            return "没有读取到图片数据，请重新选择图片。"
         case is ImagePipelineError:
             return "图片缓存不可用，请稍后重试。"
         default:
@@ -61,17 +63,27 @@ struct ErrorPresenter {
             switch error {
             case .contentTooLarge, .missingToken, .api:
                 return false
-            case .invalidResponse, .network:
+            case .invalidResponse:
                 return true
+            case .network(let detail):
+                return !isClientHTTPError(detail)
             }
         }
-        if error is ImageCompressorError {
+        if error is ImageCompressorError || error is PhotoPickerError {
             return false
         }
         if error is HostError || error is ImagePipelineError {
             return true
         }
         return true
+    }
+
+    private static func isClientHTTPError(_ detail: String) -> Bool {
+        guard detail.hasPrefix("HTTP "),
+              let codeToken = detail.dropFirst(5).split(separator: " ").first,
+              let code = Int(String(codeToken))
+        else { return false }
+        return (400..<500).contains(code)
     }
 
     private static func telegraphMessage(_ error: TelegraphError) -> String {

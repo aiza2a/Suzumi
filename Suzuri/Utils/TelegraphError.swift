@@ -1,7 +1,7 @@
 import Foundation
 
 /// 全 App 统一错误类型。
-enum TelegraphError: Error, Equatable {
+enum TelegraphError: Error, Equatable, Sendable {
     /// `ok == false`，服务器返回的 error 字符串。
     case api(message: String)
     /// 信封或 JSON 解析失败。
