@@ -4,17 +4,21 @@ on:
   push:
     tags: ['v*']
 
-# Required repository secrets before enabling TestFlight delivery:
+# Set the repository variable RELEASE_ENABLED=true only after all signing and
+# App Store Connect secrets below have been configured. Until then this job is
+# intentionally skipped (D5 release gate).
+# Required repository secrets:
 # IOS_CERT_P12, IOS_CERT_PASSWORD, IOS_PROVISIONING_PROFILE (base64),
-# APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID.
+# APPLE_TEAM_ID, ASC_ISSUER_ID, ASC_API_KEY_ID, ASC_API_PRIVATE_KEY.
 jobs:
   release:
-    runs-on: macos-14
+    if: vars.RELEASE_ENABLED == 'true'
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: latest-stable
+          xcode-version: "26.3"
       - name: Import signing
         uses: apple-actions/import-codesign-certs@v3
         with:
@@ -27,7 +31,7 @@ jobs:
           set -euo pipefail
           test -n "$IOS_PROVISIONING_PROFILE"
           profile_path="$RUNNER_TEMP/Suzuri.mobileprovision"
-          echo "$IOS_PROVISIONING_PROFILE" | base64 --decode > "$profile_path"
+          echo "$IOS_PROVISIONING_PROFILE" | base64 -D > "$profile_path"
           security cms -D -i "$profile_path" > "$RUNNER_TEMP/SuzuriProfile.plist"
           profile_uuid=$(/usr/libexec/PlistBuddy -c 'Print:UUID' "$RUNNER_TEMP/SuzuriProfile.plist")
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
@@ -39,26 +43,37 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          release_version="${GITHUB_REF_NAME#v}"
+          if [[ ! "$release_version" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+            echo "Tag must be vMAJOR.MINOR or vMAJOR.MINOR.PATCH: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          build_number=$((GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT))
           xcodebuild -project Suzuri.xcodeproj -scheme Suzuri \
             -configuration Release -archivePath build/Suzuri.xcarchive \
             -destination 'generic/platform=iOS' \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            MARKETING_VERSION="$release_version" \
+            CURRENT_PROJECT_VERSION="$build_number" \
             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES \
             CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE="$PROFILE_UUID" archive
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" archive
       - name: Export IPA
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          sed 's/\$(TEAM_ID_PLACEHOLDER)/'"$APPLE_TEAM_ID"'/g' \
+          sed \
+            -e 's/\$(TEAM_ID_PLACEHOLDER)/'"$APPLE_TEAM_ID"'/g' \
+            -e 's/\$(PROFILE_UUID_PLACEHOLDER)/'"$PROFILE_UUID"'/g' \
             .github/exportOptions.plist > "$RUNNER_TEMP/exportOptions.plist"
           xcodebuild -exportArchive -archivePath build/Suzuri.xcarchive \
             -exportOptionsPlist "$RUNNER_TEMP/exportOptions.plist" \
             -exportPath build/export
-      - uses: apple-actions/upload-testflight-build@v1
+      - uses: apple-actions/upload-testflight-build@v5
         with:
           app-path: build/export/Suzuri.ipa
-          apple-id: ${{ secrets.APPLE_ID }}
-          app-specific-password: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          team-id: ${{ secrets.APPLE_TEAM_ID }}
+          issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+          api-key-id: ${{ secrets.ASC_API_KEY_ID }}
+          api-private-key: ${{ secrets.ASC_API_PRIVATE_KEY }}
+          uses-non-exempt-encryption: 'false'
