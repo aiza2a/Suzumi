@@ -1,4 +1,3 @@
-import CryptoKit
 import SwiftUI
 import UIKit
 
@@ -132,6 +131,7 @@ struct PageListView: View {
                     .padding(.bottom, 24)
                 }
                 .refreshable {
+                    await sessionController.load()
                     await reload()
                 }
             }
@@ -178,11 +178,17 @@ struct PageListView: View {
             }
             .onAppear {
                 guard hasLoaded, !isInitialLoading, !isLoading else { return }
-                Task { @MainActor in await reload() }
+                Task { @MainActor in
+                    await sessionController.load()
+                    await reload()
+                }
             }
             .onChange(of: reachability.isConnected) { wasConnected, isConnected in
                 guard !wasConnected, isConnected else { return }
-                Task { @MainActor in await reload() }
+                Task { @MainActor in
+                    await sessionController.load()
+                    await reload()
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .pageDidPublish)) { notification in
                 guard let page = notification.object as? Page else { return }
@@ -217,6 +223,9 @@ struct PageListView: View {
 
     private func reload() async {
         guard !Task.isCancelled else { return }
+        sessionController.synchronizeOrigin()
+        let requestOrigin = sessionController.currentOrigin
+        let requestToken = sessionController.accessToken
         requestGeneration += 1
         let generation = requestGeneration
         isLoading = true
@@ -229,7 +238,10 @@ struct PageListView: View {
         }
 
         hiddenPagePaths = Set(UserDefaults.standard.stringArray(forKey: scopedHiddenPagesKey) ?? [])
-        drafts = draftStore.loadAll().filter { !$0.isPublished }
+        drafts = draftStore.loadAll(
+            origin: requestOrigin,
+            accountFingerprint: sessionController.accountFingerprint
+        ).filter { !$0.isPublished }
 
         // Published pages are cached so the list remains useful after relaunching offline.
         if let cached = loadCachedPageList() {
@@ -255,7 +267,11 @@ struct PageListView: View {
         do {
             let service = try pageService()
             let result = try await service.getPageList(offset: 0, limit: pageLimit)
-            guard generation == requestGeneration, !Task.isCancelled else { return }
+            guard generation == requestGeneration,
+                  requestOrigin == sessionController.currentOrigin,
+                  requestToken == sessionController.accessToken,
+                  !Task.isCancelled
+            else { return }
             let fetchedAt = Date()
             for page in result.pages {
                 pageLastSeen[page.path] = fetchedAt
@@ -266,7 +282,11 @@ struct PageListView: View {
             hasMorePages = !result.pages.isEmpty && nextOffset < totalPageCount
             saveCachedPageList(PageList(totalCount: result.total, pages: result.pages))
         } catch {
-            guard generation == requestGeneration, !Task.isCancelled else { return }
+            guard generation == requestGeneration,
+                  requestOrigin == sessionController.currentOrigin,
+                  requestToken == sessionController.accessToken,
+                  !Task.isCancelled
+            else { return }
             if sessionController.handleAuthenticationFailure(error) {
                 pages = []
                 totalPageCount = 0
@@ -279,8 +299,11 @@ struct PageListView: View {
     }
 
     private func loadMoreIfNeeded() async {
+        sessionController.synchronizeOrigin()
+        let requestOrigin = sessionController.currentOrigin
+        let requestToken = sessionController.accessToken
         guard !isLoading,
-              sessionController.accessToken != nil,
+              requestToken != nil,
               hasMorePages,
               !Task.isCancelled
         else { return }
@@ -295,7 +318,11 @@ struct PageListView: View {
         do {
             let service = try pageService()
             let result = try await service.getPageList(offset: nextOffset, limit: pageLimit)
-            guard generation == requestGeneration, !Task.isCancelled else { return }
+            guard generation == requestGeneration,
+                  requestOrigin == sessionController.currentOrigin,
+                  requestToken == sessionController.accessToken,
+                  !Task.isCancelled
+            else { return }
             let fetchedAt = Date()
             for page in result.pages {
                 pageLastSeen[page.path] = fetchedAt
@@ -308,7 +335,11 @@ struct PageListView: View {
             hasMorePages = !result.pages.isEmpty && nextOffset < totalPageCount
             saveAdditionalCachedPages(result.pages, total: result.total)
         } catch {
-            guard generation == requestGeneration, !Task.isCancelled else { return }
+            guard generation == requestGeneration,
+                  requestOrigin == sessionController.currentOrigin,
+                  requestToken == sessionController.accessToken,
+                  !Task.isCancelled
+            else { return }
             if sessionController.handleAuthenticationFailure(error) {
                 pages = []
                 totalPageCount = 0
@@ -321,10 +352,9 @@ struct PageListView: View {
     }
 
     private var scopeFingerprint: String {
-        let scope = "\(sessionController.serverManager.apiBase)|\(sessionController.accessToken ?? "anonymous")"
-        return SHA256.hash(data: Data(scope.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
+        TokenStore.fingerprint(
+            "\(sessionController.currentOrigin)|\(sessionController.accountFingerprint)"
+        )
     }
 
     private var scopedCachedPagesKey: String {
@@ -341,12 +371,7 @@ struct PageListView: View {
         else {
             return nil
         }
-        var pages = cached.pages
-        for index in pages.indices {
-            // A cached list came from a response that included the list permission field.
-            pages[index].hasCanEditField = true
-        }
-        return PageList(totalCount: cached.totalCount, pages: pages)
+        return cached
     }
 
     private func saveCachedPageList(_ pageList: PageList) {
@@ -368,14 +393,24 @@ struct PageListView: View {
     private func openPage(_ page: Page) {
         // Generate the destination's draft identity before navigation so view recreation
         // cannot create a second local draft for the same editing session.
-        let draftID = draftStore.loadUnpublished(pagePath: page.path)?.id ?? UUID()
+        let draftID = draftStore.loadUnpublished(
+            pagePath: page.path,
+            origin: sessionController.currentOrigin,
+            accountFingerprint: sessionController.accountFingerprint
+        )?.id ?? UUID()
         path.append(.page(page, draftID: draftID))
     }
 
     private func createDraftAndOpen() {
         do {
-            let id = try draftStore.createDraft()
-            drafts = draftStore.loadAll().filter { !$0.isPublished }
+            let id = try draftStore.createDraft(
+                origin: sessionController.currentOrigin,
+                accountFingerprint: sessionController.accountFingerprint
+            )
+            drafts = draftStore.loadAll(
+                origin: sessionController.currentOrigin,
+                accountFingerprint: sessionController.accountFingerprint
+            ).filter { !$0.isPublished }
             path.append(.draft(id))
         } catch {
             errorMessage = ErrorPresenter.message(for: error)

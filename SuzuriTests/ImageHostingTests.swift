@@ -136,6 +136,22 @@ final class ImageHostingTests: XCTestCase {
         }
     }
 
+    func testTelegraphCompatRejectsInsecureBaseURL() async {
+        let host = TelegraphCompatHost(
+            baseURL: URL(string: "http://upload.example")!,
+            session: makeSession()
+        )
+
+        do {
+            _ = try await host.upload(Data(), filename: "a.jpg", mimeType: "image/jpeg")
+            XCTFail("Basic Auth-compatible host must reject HTTP")
+        } catch let error as HostError {
+            XCTAssertEqual(error, .badResponse)
+        } catch {
+            XCTFail("应为 HostError，实际为 \(error)")
+        }
+    }
+
     func testTelegraphCompatResolvesRelativeSourceAgainstDefaultBaseURL() async throws {
         ImageHostingMockURLProtocol.data = Data(#"[{"src":"/file/a.png"}]"#.utf8)
         let host = TelegraphCompatHost(session: makeSession())

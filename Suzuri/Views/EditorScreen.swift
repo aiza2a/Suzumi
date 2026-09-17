@@ -210,7 +210,11 @@ struct EditorScreen: View {
                 Task { @MainActor in
                     await refreshPage(
                         path: path,
-                        preserveLocalDraft: draftStore.loadUnpublished(pagePath: path) != nil
+                        preserveLocalDraft: draftStore.loadUnpublished(
+                            pagePath: path,
+                            origin: draftOrigin,
+                            accountFingerprint: draftAccountFingerprint
+                        ) != nil
                     )
                 }
             }
@@ -251,7 +255,11 @@ struct EditorScreen: View {
                                 remoteEditUnavailable = false
                                 await refreshPage(
                                     path: path,
-                                    preserveLocalDraft: draftStore.loadUnpublished(pagePath: path) != nil
+                                    preserveLocalDraft: draftStore.loadUnpublished(
+                                        pagePath: path,
+                                        origin: draftOrigin,
+                                        accountFingerprint: draftAccountFingerprint
+                                    ) != nil
                                 )
                             } else {
                                 await publish()
@@ -337,7 +345,11 @@ struct EditorScreen: View {
         else { return false }
         guard let path = editPath else { return true }
         guard sessionController.accessToken != nil else { return false }
-        return currentPage?.content != nil || draftStore.loadUnpublished(pagePath: path) != nil
+        return currentPage?.content != nil || draftStore.loadUnpublished(
+            pagePath: path,
+            origin: draftOrigin,
+            accountFingerprint: draftAccountFingerprint
+        ) != nil
     }
 
     private var canPublish: Bool {
@@ -354,6 +366,24 @@ struct EditorScreen: View {
 
     private var editPath: String? {
         currentPage?.path ?? targetPagePath
+    }
+
+    private var draftOrigin: String {
+        sessionController.currentOrigin
+    }
+
+    private var draftAccountFingerprint: String {
+        sessionController.accountFingerprint
+    }
+
+    private func saveCurrentDraft() throws {
+        try draftStore.saveNow(
+            id: draftID,
+            title: title,
+            blocks: document.blocks,
+            origin: draftOrigin,
+            accountFingerprint: draftAccountFingerprint
+        )
     }
 
     private var shouldConfirmExit: Bool {
@@ -381,13 +411,18 @@ struct EditorScreen: View {
         hasUnsavedChanges = true
         isUnpublishedDraft = true
         if isFirstChange {
-            try? draftStore.saveNow(
-                id: draftID,
-                title: title,
-                blocks: document.blocks
-            )
-            if let targetPagePath {
-                draftStore.setPagePath(id: draftID, pagePath: targetPagePath)
+            do {
+                try saveCurrentDraft()
+                if let targetPagePath {
+                    draftStore.setPagePath(
+                        id: draftID,
+                        pagePath: targetPagePath,
+                        origin: draftOrigin,
+                        accountFingerprint: draftAccountFingerprint
+                    )
+                }
+            } catch {
+                presentDraftSaveError(error)
             }
         }
         scheduleDraftSaveIfNeeded()
@@ -397,11 +432,17 @@ struct EditorScreen: View {
         guard !isHydrating, canEdit,
               isUnpublishedDraft || hasUnsavedChanges
         else { return }
-        try? draftStore.saveNow(
-            id: draftID,
-            title: title,
-            blocks: document.blocks
-        )
+        do {
+            try saveCurrentDraft()
+        } catch {
+            presentDraftSaveError(error)
+        }
+    }
+
+    private func presentDraftSaveError(_ error: Error) {
+        errorMessage = "草稿保存失败：\(ErrorPresenter.message(for: error))"
+        isPageLoadError = false
+        canRetryError = true
     }
 
     private func scheduleDraftSaveIfNeeded() {
@@ -409,7 +450,9 @@ struct EditorScreen: View {
         draftStore.scheduleSave(
             id: draftID,
             title: title,
-            blocks: document.blocks
+            blocks: document.blocks,
+            origin: draftOrigin,
+            accountFingerprint: draftAccountFingerprint
         )
     }
 
@@ -417,7 +460,11 @@ struct EditorScreen: View {
         isHydrating = true
         hasUnsavedChanges = false
         await sessionController.load()
-        let existingDraft = draftStore.load(id: draftID)
+        let existingDraft = draftStore.load(
+            id: draftID,
+            origin: draftOrigin,
+            accountFingerprint: draftAccountFingerprint
+        )
         targetPagePath = existingDraft?.pagePath ?? currentPage?.path
         isUnpublishedDraft = existingDraft.map { !$0.isPublished } ?? false
 
@@ -436,8 +483,12 @@ struct EditorScreen: View {
             await refreshPage(path: path, preserveLocalDraft: true)
         } else if existingDraft == nil {
             // Do not seed an editable page draft until its remote content has hydrated.
-            try? draftStore.saveNow(id: draftID, title: title, blocks: document.blocks)
-            isUnpublishedDraft = true
+            do {
+                try saveCurrentDraft()
+                isUnpublishedDraft = true
+            } catch {
+                presentDraftSaveError(error)
+            }
         }
 
         // Let onChange observers run while hydration is still guarded.
@@ -449,12 +500,25 @@ struct EditorScreen: View {
         isLoadingPage = currentPage?.content == nil
         defer { isLoadingPage = false }
 
+        let requestOrigin = sessionController.currentOrigin
+        let requestToken = sessionController.accessToken
         do {
             let originalPage = currentPage
             let client = try sessionController.validatedClient()
             var fetchedPage = try await PageService(client: client)
                 .getPage(path: path, returnContent: true)
-            if fetchedPage.content == nil, originalPage?.content == nil {
+            guard requestOrigin == sessionController.currentOrigin,
+                  requestToken == sessionController.accessToken,
+                  !Task.isCancelled
+            else { return }
+            let hasLocalDraft = draftStore.loadUnpublished(
+                pagePath: path,
+                origin: draftOrigin,
+                accountFingerprint: draftAccountFingerprint
+            ) != nil
+            if fetchedPage.content == nil,
+               originalPage?.content == nil,
+               !hasLocalDraft {
                 throw TelegraphError.invalidResponse
             }
             if fetchedPage.content == nil, let cachedContent = originalPage?.content {
@@ -498,6 +562,10 @@ struct EditorScreen: View {
                 isHydrating = wasHydrating
             }
         } catch {
+            guard requestOrigin == sessionController.currentOrigin,
+                  requestToken == sessionController.accessToken,
+                  !Task.isCancelled
+            else { return }
             // Cached content remains usable. Surface a retry without turning it into publish.
             if sessionController.handleAuthenticationFailure(error), editPath != nil {
                 remoteEditUnavailable = true
@@ -532,7 +600,11 @@ struct EditorScreen: View {
             } else {
                 document.blocks.append(imageBlock)
             }
-            try? draftStore.saveNow(id: draftID, title: title, blocks: document.blocks)
+            do {
+                try saveCurrentDraft()
+            } catch {
+                presentDraftSaveError(error)
+            }
             imageProviderMessage = "图片已上传（\(result.providerID)）"
         } catch {
             retryImageData = sourceData
@@ -549,19 +621,34 @@ struct EditorScreen: View {
         canRetryError = false
         defer { isPublishing = false }
 
+        var requestOrigin: String?
+        var requestToken: String?
         do {
             let contentBlocks = document.blocks
             // Persist the failed publish as a local draft, but reject oversized content before
             // account creation so an invalid first publish does not create an unused account.
-            try? draftStore.saveNow(id: draftID, title: title, blocks: contentBlocks)
+            try saveCurrentDraft()
             let nodes = BlockEncoder.nodesForPublishing(contentBlocks)
             try BlockEncoder.validateSize(of: nodes)
             let client = try await sessionController.ensureAccount()
+            draftStore.adoptScope(
+                id: draftID,
+                origin: draftOrigin,
+                accountFingerprint: draftAccountFingerprint
+            )
+            requestOrigin = sessionController.currentOrigin
+            requestToken = sessionController.accessToken
             let service = PageService(client: client)
             let result: Page
 
             if let path = editPath {
-                guard currentPage?.content != nil else {
+                guard currentPage?.content != nil
+                    || draftStore.loadUnpublished(
+                        pagePath: path,
+                        origin: draftOrigin,
+                        accountFingerprint: draftAccountFingerprint
+                    ) != nil
+                else {
                     throw TelegraphError.invalidResponse
                 }
                 let response = try await service.editPage(
@@ -571,6 +658,10 @@ struct EditorScreen: View {
                     authorUrl: sessionController.authorURL ?? currentPage?.authorUrl,
                     content: nodes
                 )
+                guard requestOrigin == sessionController.currentOrigin,
+                      requestToken == sessionController.accessToken,
+                      !Task.isCancelled
+                else { return }
                 result = response.preservingCanEdit(
                     from: currentPage?.hasCanEditField == true ? currentPage : nil,
                     fallback: true
@@ -582,16 +673,30 @@ struct EditorScreen: View {
                     authorUrl: sessionController.authorURL,
                     content: nodes
                 )
+                guard requestOrigin == sessionController.currentOrigin,
+                      requestToken == sessionController.accessToken,
+                      !Task.isCancelled
+                else { return }
                 result = created.hasCanEditField ? created : created.withCanEdit(true)
             }
 
             guard let url = URL(string: result.url), isHTTPURL(url) else {
                 throw TelegraphError.invalidResponse
             }
-            try? draftStore.saveNow(id: draftID, title: title, blocks: contentBlocks)
+            do {
+                try saveCurrentDraft()
+            } catch {
+                presentDraftSaveError(error)
+                throw error
+            }
             currentPage = result
             targetPagePath = result.path
-            draftStore.markPublished(id: draftID, pagePath: result.path)
+            draftStore.markPublished(
+                id: draftID,
+                pagePath: result.path,
+                origin: draftOrigin,
+                accountFingerprint: draftAccountFingerprint
+            )
             isUnpublishedDraft = false
             hasUnsavedChanges = false
             withAnimation(AppAnimation.listInsert) {
@@ -599,6 +704,12 @@ struct EditorScreen: View {
             }
             NotificationCenter.default.post(name: .pageDidPublish, object: result)
         } catch {
+            if let requestOrigin,
+               let requestToken,
+               requestOrigin != sessionController.currentOrigin
+                    || requestToken != sessionController.accessToken {
+                return
+            }
             if sessionController.handleAuthenticationFailure(error), editPath != nil {
                 remoteEditUnavailable = true
                 currentPage = currentPage?.withCanEdit(false)
