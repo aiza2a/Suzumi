@@ -68,7 +68,12 @@ final class ServerManager {
     }
 
     var apiURL: URL? {
-        guard let url = URL(string: apiBase), isHTTPURL(url) else { return nil }
+        guard let url = URL(string: apiBase),
+              let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased(),
+              scheme == "https"
+                || (scheme == "http" && (host == "localhost" || host == "127.0.0.1"))
+        else { return nil }
         return url
     }
 

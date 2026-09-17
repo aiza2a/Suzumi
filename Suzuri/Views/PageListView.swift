@@ -418,7 +418,12 @@ struct PageListView: View {
     }
 
     private func deleteDraft(_ draft: Draft) {
-        draftStore.delete(id: draft.id)
+        guard draftStore.delete(id: draft.id) else {
+            if let error = draftStore.lastSaveError {
+                errorMessage = "草稿删除失败：\(ErrorPresenter.message(for: error))"
+            }
+            return
+        }
         drafts.removeAll { $0.id == draft.id }
     }
 
@@ -429,6 +434,7 @@ struct PageListView: View {
     }
 
     private func upsertPublishedPage(_ page: Page) {
+        drafts.removeAll { $0.pagePath == page.path || $0.isPublished }
         let now = Date()
         pageLastSeen[page.path] = now
         if hiddenPagePaths.contains(page.path) {

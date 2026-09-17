@@ -224,14 +224,20 @@ struct SettingsView: View {
     private var mirrorBinding: Binding<ServerManager.Mirror> {
         Binding(
             get: { serverManager.current },
-            set: { serverManager.current = $0 }
+            set: {
+                serverManager.current = $0
+                sessionController.synchronizeOrigin()
+            }
         )
     }
 
     private var customAPIBaseBinding: Binding<String> {
         Binding(
             get: { serverManager.customAPIBase },
-            set: { serverManager.customAPIBase = $0 }
+            set: {
+                serverManager.customAPIBase = $0
+                sessionController.synchronizeOrigin()
+            }
         )
     }
 

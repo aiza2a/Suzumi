@@ -28,10 +28,14 @@ struct EditorScreen: View {
     @State private var publishedURL: URL?
     @State private var errorMessage: String?
     @State private var isPageLoadError = false
+    @State private var isDraftSaveError = false
+    @State private var requestGeneration = 0
+    @State private var isCancelled = false
     @State private var remoteEditUnavailable = false
     @State private var hasUnsupportedContent = false
     @State private var isUnpublishedDraft = false
     @State private var hasUnsavedChanges = false
+    @State private var isSuppressingChanges = false
     @State private var isShowingExitConfirmation = false
     @State private var canRetryError = false
     @State private var imageUploadErrorMessage: String?
@@ -179,6 +183,9 @@ struct EditorScreen: View {
                     .accessibilityLabel("设置")
                 }
             }
+            .onAppear {
+                isCancelled = false
+            }
             .task {
                 await loadInitialContent()
             }
@@ -220,6 +227,8 @@ struct EditorScreen: View {
             }
             .onDisappear {
                 saveDraftNow()
+                isCancelled = true
+                requestGeneration += 1
             }
             .alert("图片上传失败", isPresented: Binding(
                 get: { imageUploadErrorMessage != nil },
@@ -244,7 +253,9 @@ struct EditorScreen: View {
             } message: {
                 Text(imageUploadErrorMessage ?? "")
             }
-            .alert(isPageLoadError ? "加载失败" : "发布失败", isPresented: Binding(
+            .alert(
+                isPageLoadError ? "加载失败" : (isDraftSaveError ? "草稿保存失败" : "发布失败"),
+                isPresented: Binding(
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } }
             )) {
@@ -391,6 +402,7 @@ struct EditorScreen: View {
     }
 
     private func requestDismiss() {
+        guard !isPublishing, !isUploadingImage, !isPickingImage else { return }
         if shouldConfirmExit {
             isShowingExitConfirmation = true
         } else {
@@ -406,7 +418,7 @@ struct EditorScreen: View {
     }
 
     private func markChangedAndScheduleSave() {
-        guard !isHydrating, !isPublishing, canEdit else { return }
+        guard !isCancelled, !isHydrating, !isSuppressingChanges, !isPublishing, canEdit else { return }
         let isFirstChange = !hasUnsavedChanges
         hasUnsavedChanges = true
         isUnpublishedDraft = true
@@ -414,12 +426,15 @@ struct EditorScreen: View {
             do {
                 try saveCurrentDraft()
                 if let targetPagePath {
-                    draftStore.setPagePath(
+                    let pathSaved = draftStore.setPagePath(
                         id: draftID,
                         pagePath: targetPagePath,
                         origin: draftOrigin,
                         accountFingerprint: draftAccountFingerprint
                     )
+                    if !pathSaved, let error = draftStore.lastSaveError {
+                        presentDraftSaveError(error)
+                    }
                 }
             } catch {
                 presentDraftSaveError(error)
@@ -429,7 +444,7 @@ struct EditorScreen: View {
     }
 
     private func saveDraftNow() {
-        guard !isHydrating, canEdit,
+        guard !isCancelled, !isHydrating, canEdit,
               isUnpublishedDraft || hasUnsavedChanges
         else { return }
         do {
@@ -442,11 +457,12 @@ struct EditorScreen: View {
     private func presentDraftSaveError(_ error: Error) {
         errorMessage = "草稿保存失败：\(ErrorPresenter.message(for: error))"
         isPageLoadError = false
+        isDraftSaveError = true
         canRetryError = true
     }
 
     private func scheduleDraftSaveIfNeeded() {
-        guard !isHydrating, canEdit else { return }
+        guard !isCancelled, !isHydrating, canEdit else { return }
         draftStore.scheduleSave(
             id: draftID,
             title: title,
@@ -457,9 +473,12 @@ struct EditorScreen: View {
     }
 
     private func loadInitialContent() async {
+        guard !isCancelled else { return }
         isHydrating = true
+        isSuppressingChanges = true
         hasUnsavedChanges = false
         await sessionController.load()
+        guard !isCancelled else { return }
         let existingDraft = draftStore.load(
             id: draftID,
             origin: draftOrigin,
@@ -491,14 +510,21 @@ struct EditorScreen: View {
             }
         }
 
-        // Let onChange observers run while hydration is still guarded.
-        await Task.yield()
+        // Keep both guards active until all restored state has been assigned.
+        isSuppressingChanges = false
         isHydrating = false
     }
 
     private func refreshPage(path: String, preserveLocalDraft: Bool) async {
+        guard !isCancelled else { return }
+        requestGeneration += 1
+        let generation = requestGeneration
         isLoadingPage = currentPage?.content == nil
-        defer { isLoadingPage = false }
+        defer {
+            if generation == requestGeneration {
+                isLoadingPage = false
+            }
+        }
 
         let requestOrigin = sessionController.currentOrigin
         let requestToken = sessionController.accessToken
@@ -507,8 +533,10 @@ struct EditorScreen: View {
             let client = try sessionController.validatedClient()
             var fetchedPage = try await PageService(client: client)
                 .getPage(path: path, returnContent: true)
-            guard requestOrigin == sessionController.currentOrigin,
+            guard generation == requestGeneration,
+                  requestOrigin == sessionController.currentOrigin,
                   requestToken == sessionController.accessToken,
+                  !isCancelled,
                   !Task.isCancelled
             else { return }
             let hasLocalDraft = draftStore.loadUnpublished(
@@ -542,12 +570,14 @@ struct EditorScreen: View {
             errorMessage = nil
             canRetryError = false
             isPageLoadError = false
+            isDraftSaveError = false
 
             if !preserveLocalDraft {
-                // Keep mutation observers quiet while remote state is applied. On recovery,
-                // yield once so SwiftUI processes the guarded transaction before re-enabling edits.
+                // Keep mutation observers quiet while remote state is applied.
                 let wasHydrating = isHydrating
+                let wasSuppressingChanges = isSuppressingChanges
                 isHydrating = true
+                isSuppressingChanges = true
                 title = remotePage.title
                 authorName = remotePage.authorName ?? sessionController.authorName ?? ""
                 if let content = remotePage.content {
@@ -556,14 +586,14 @@ struct EditorScreen: View {
                         document.blocks = decoded
                     }
                 }
-                if !wasHydrating {
-                    await Task.yield()
-                }
                 isHydrating = wasHydrating
+                isSuppressingChanges = wasSuppressingChanges
             }
         } catch {
-            guard requestOrigin == sessionController.currentOrigin,
+            guard generation == requestGeneration,
+                  requestOrigin == sessionController.currentOrigin,
                   requestToken == sessionController.accessToken,
+                  !isCancelled,
                   !Task.isCancelled
             else { return }
             // Cached content remains usable. Surface a retry without turning it into publish.
@@ -579,7 +609,9 @@ struct EditorScreen: View {
 
     /// 统一执行压缩、缓存和上传；成功后把图片块插入当前焦点之后。
     private func uploadImage(_ sourceData: Data) async {
-        guard canEdit, !isHydrating, !isPublishing else { return }
+        guard !isCancelled, canEdit, !isHydrating, !isPublishing else { return }
+        requestGeneration += 1
+        let generation = requestGeneration
         isUploadingImage = true
         imageUploadErrorMessage = nil
         retryImageData = nil
@@ -593,6 +625,7 @@ struct EditorScreen: View {
             let pipeline = injectedImagePipeline
                 ?? ImagePipeline(uploadService: ImageHostConfiguration.makeUploadService())
             let result = try await pipeline.processAndUpload(sourceData)
+            guard !isCancelled, generation == requestGeneration else { return }
             let imageBlock = Block.figure(id: UUID(), imageURL: result.url, caption: "")
             if let focusedID = document.focusedBlockID,
                let index = document.index(of: focusedID) {
@@ -614,10 +647,13 @@ struct EditorScreen: View {
 
     /// 新建页面走 createPage，已发布页面走 editPage。
     private func publish() async {
-        guard canPublish else { return }
+        guard !isCancelled, canPublish else { return }
+        requestGeneration += 1
+        let generation = requestGeneration
         isPublishing = true
         errorMessage = nil
         isPageLoadError = false
+        isDraftSaveError = false
         canRetryError = false
         defer { isPublishing = false }
 
@@ -627,15 +663,23 @@ struct EditorScreen: View {
             let contentBlocks = document.blocks
             // Persist the failed publish as a local draft, but reject oversized content before
             // account creation so an invalid first publish does not create an unused account.
-            try saveCurrentDraft()
+            do {
+                try saveCurrentDraft()
+            } catch {
+                presentDraftSaveError(error)
+                throw error
+            }
             let nodes = BlockEncoder.nodesForPublishing(contentBlocks)
             try BlockEncoder.validateSize(of: nodes)
             let client = try await sessionController.ensureAccount()
-            draftStore.adoptScope(
+            guard !isCancelled, generation == requestGeneration else { return }
+            guard draftStore.adoptScope(
                 id: draftID,
                 origin: draftOrigin,
                 accountFingerprint: draftAccountFingerprint
-            )
+            ) else {
+                throw draftStore.lastSaveError ?? DraftStore.DraftStoreError.notFound
+            }
             requestOrigin = sessionController.currentOrigin
             requestToken = sessionController.accessToken
             let service = PageService(client: client)
@@ -658,8 +702,10 @@ struct EditorScreen: View {
                     authorUrl: sessionController.authorURL ?? currentPage?.authorUrl,
                     content: nodes
                 )
-                guard requestOrigin == sessionController.currentOrigin,
+                guard generation == requestGeneration,
+                      requestOrigin == sessionController.currentOrigin,
                       requestToken == sessionController.accessToken,
+                      !isCancelled,
                       !Task.isCancelled
                 else { return }
                 result = response.preservingCanEdit(
@@ -673,8 +719,10 @@ struct EditorScreen: View {
                     authorUrl: sessionController.authorURL,
                     content: nodes
                 )
-                guard requestOrigin == sessionController.currentOrigin,
+                guard generation == requestGeneration,
+                      requestOrigin == sessionController.currentOrigin,
                       requestToken == sessionController.accessToken,
+                      !isCancelled,
                       !Task.isCancelled
                 else { return }
                 result = created.hasCanEditField ? created : created.withCanEdit(true)
@@ -683,20 +731,27 @@ struct EditorScreen: View {
             guard let url = URL(string: result.url), isHTTPURL(url) else {
                 throw TelegraphError.invalidResponse
             }
+            var localPublishPersistenceFailed = false
             do {
                 try saveCurrentDraft()
             } catch {
-                presentDraftSaveError(error)
-                throw error
+                localPublishPersistenceFailed = true
             }
             currentPage = result
             targetPagePath = result.path
-            draftStore.markPublished(
+            let markedPublished = draftStore.markPublished(
                 id: draftID,
                 pagePath: result.path,
                 origin: draftOrigin,
                 accountFingerprint: draftAccountFingerprint
             )
+            if !markedPublished {
+                localPublishPersistenceFailed = true
+            }
+            if localPublishPersistenceFailed {
+                imageProviderMessage = "文章已发布，但本地草稿保存失败"
+            }
+
             isUnpublishedDraft = false
             hasUnsavedChanges = false
             withAnimation(AppAnimation.listInsert) {
@@ -704,6 +759,7 @@ struct EditorScreen: View {
             }
             NotificationCenter.default.post(name: .pageDidPublish, object: result)
         } catch {
+            guard generation == requestGeneration, !isCancelled else { return }
             if let requestOrigin,
                let requestToken,
                requestOrigin != sessionController.currentOrigin
