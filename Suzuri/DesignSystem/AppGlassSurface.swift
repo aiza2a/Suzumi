@@ -57,13 +57,22 @@ extension View {
     }
 }
 
-/// iOS 26 原生 `.glassEffect()` 分支（`#available` 运行期判断，17/18 走空修饰）。编译期 17 部署下需用 `@available` 而非 `if #available` 直接挂可选 API；此处用 modifier 包一层以兼容旧 SDK 编译。
+/// iOS 26 原生 `.glassEffect()` 分支（`#available` 运行期判断，17/18 走空修饰）。
+/// iOS 26 专属 API 封装进带 `@available` 的方法，避免旧 SDK 编译期符号解析失败。
 struct NativeGlassIfAvailable: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.glassEffect()
+            content.suzuriNativeGlassEffect()
         } else {
             content
         }
+    }
+}
+
+extension View {
+    /// 原生液态玻璃。仅 iOS 26+ 可调用（`@available` 编译期隔离 glassEffect 符号）。
+    @available(iOS 26.0, *)
+    func suzuriNativeGlassEffect() -> some View {
+        self.glassEffect()
     }
 }

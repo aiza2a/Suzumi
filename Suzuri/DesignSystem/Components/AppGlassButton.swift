@@ -5,7 +5,7 @@ import SwiftUI
 /// 主样式：`brand600` 填充 + 白字 + cornerRadius 14 + 按压 `scaleEffect(0.97)` + 阴影（GlassButton 反馈）。
 /// 次级样式：`appGlass()` 材质 + `brand600` 文字。
 struct AppGlassButton: View {
-    enum Style {
+    enum Style: Equatable {
         case primary      // brand600 填充
         case secondary    // 玻璃材质 + brand600 文字
     }
