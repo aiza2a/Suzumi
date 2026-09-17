@@ -40,7 +40,7 @@ struct AppGlassSurface: ViewModifier {
             .compositingGroup()
             .shadow(color: .black.opacity(allowsShadow ? (cs == .dark ? 0.35 : 0.10) : 0),
                     radius: allowsShadow ? 16 : 0, x: 0, y: allowsShadow ? 6 : 0)
-            .modifier(NativeGlassIfAvailable())
+            .suzuriGlassEffectIfAvailable(cornerRadius: cornerRadius)
     }
 }
 
@@ -57,22 +57,17 @@ extension View {
     }
 }
 
-/// iOS 26 原生 `.glassEffect()` 分支（`#available` 运行期判断，17/18 走空修饰）。
-/// iOS 26 专属 API 封装进带 `@available` 的方法，避免旧 SDK 编译期符号解析失败。
-struct NativeGlassIfAvailable: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.suzuriNativeGlassEffect()
-        } else {
-            content
-        }
-    }
-}
-
 extension View {
-    /// 原生液态玻璃。仅 iOS 26+ 可调用（`@available` 编译期隔离 glassEffect 符号）。
-    @available(iOS 26.0, *)
-    func suzuriNativeGlassEffect() -> some View {
-        self.glassEffect()
+    /// iOS 26+ 原生液态玻璃，旧系统保留模拟层。
+    @ViewBuilder
+    func suzuriGlassEffectIfAvailable(cornerRadius: CGFloat) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(
+                .regular,
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+        } else {
+            self
+        }
     }
 }

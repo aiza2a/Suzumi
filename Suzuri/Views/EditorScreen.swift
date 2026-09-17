@@ -45,8 +45,8 @@ struct EditorScreen: View {
     init(
         draftID: UUID? = nil,
         page: Page? = nil,
-        sessionController: SessionController = SessionController(),
-        draftStore: DraftStore = DraftStore(),
+        sessionController: SessionController,
+        draftStore: DraftStore,
         imagePipeline: ImagePipeline? = nil
     ) {
         let initialBlocks: [Block]
@@ -69,6 +69,17 @@ struct EditorScreen: View {
         self._document = State(initialValue: BlockEditorDocument(blocks: initialBlocks))
         self._title = State(initialValue: page?.title ?? "")
         self._authorName = State(initialValue: page?.authorName ?? sessionController.authorName ?? "")
+    }
+
+    @MainActor
+    init() {
+        self.init(
+            draftID: nil,
+            page: nil,
+            sessionController: SessionController(),
+            draftStore: DraftStore(),
+            imagePipeline: nil
+        )
     }
 
     var body: some View {

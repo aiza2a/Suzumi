@@ -36,11 +36,19 @@ struct PageListView: View {
     @State private var path: [Destination] = []
 
     init(
-        sessionController: SessionController = SessionController(),
-        draftStore: DraftStore = DraftStore()
+        sessionController: SessionController,
+        draftStore: DraftStore
     ) {
         self._sessionController = State(initialValue: sessionController)
         self.draftStore = draftStore
+    }
+
+    @MainActor
+    init() {
+        self.init(
+            sessionController: SessionController(),
+            draftStore: DraftStore()
+        )
     }
 
     var body: some View {
