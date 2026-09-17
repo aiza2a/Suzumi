@@ -14,16 +14,18 @@ struct APIClient: Sendable {
     /// 当前账号 token；非 nil 时自动追加为 `access_token` query 参数。
     var accessToken: String?
 
-    /// 所有方法统一走此入口。GET/POST 参数均追加到 query（对齐 AuthInterceptor）。
+    /// 所有方法统一走此入口，参数均追加到 query（对齐 AuthInterceptor）。
     /// - parameters:
     ///   - method: Telegraph 方法名，如 "createAccount" / "createPage"。
     ///   - params: 业务参数（不含 access_token，由本方法注入）。
     ///   - type: 期望的 result 类型。
+    ///   - httpMethod: 请求方法；读取接口使用 GET，写入接口默认 POST。
     /// - returns: 信封内 `result`。
     /// - throws: `TelegraphError`（api / invalidResponse / network）。
     func call<T: Decodable>(_ method: String,
                             params: [String: String],
-                            as type: T.Type) async throws -> T {
+                            as type: T.Type,
+                            httpMethod: String = "POST") async throws -> T {
         var comps = URLComponents(url: baseURL.appendingPathComponent(method),
                                   resolvingAgainstBaseURL: false)!
         var items = params.map { URLQueryItem(name: $0.key, value: $0.value) }
@@ -33,8 +35,7 @@ struct APIClient: Sendable {
         comps.queryItems = items
 
         var req = URLRequest(url: comps.url!)
-        // dp5a 全部走 POST；Android 用 GET 也可——这里统一 POST。
-        req.httpMethod = "POST"
+        req.httpMethod = httpMethod
 
         let data: Data
         let response: URLResponse
