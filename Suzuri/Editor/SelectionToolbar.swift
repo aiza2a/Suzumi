@@ -4,6 +4,7 @@ import SwiftUI
 ///
 /// D3 owns the visibility and animation framework. Inline formatting actions are intentionally
 /// deferred until the editor has a stable block-selection model.
+@MainActor
 struct SelectionToolbar: View {
     let isVisible: Bool
     var onDismiss: (() -> Void)?

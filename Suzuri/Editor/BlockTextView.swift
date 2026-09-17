@@ -14,6 +14,7 @@ struct BlockTextView: UIViewRepresentable {
     var placeholder: String = ""
 
     var onEnter: ((_ cursorOffset: Int) -> Void)? = nil
+    var onEnterWithSelection: ((_ range: NSRange) -> Void)? = nil
     var onBackspaceAtStart: (() -> Void)? = nil
     var onArrowUp: ((_ cursorX: CGFloat) -> Void)? = nil
     var onArrowDown: ((_ cursorX: CGFloat) -> Void)? = nil
@@ -100,6 +101,10 @@ struct BlockTextView: UIViewRepresentable {
 
     private func configureCallbacks(on textView: BlockUITextView, coordinator: Coordinator) {
         textView.onEnter = onEnter
+        textView.onEnterWithSelection = { [weak coordinator, weak textView] range in
+            guard let textView else { return }
+            coordinator?.handleEnter(range: range, in: textView)
+        }
         textView.onBackspaceAtStart = onBackspaceAtStart
         textView.onArrowUp = onArrowUp
         textView.onArrowDown = onArrowDown
@@ -140,9 +145,8 @@ struct BlockTextView: UIViewRepresentable {
             replacementText replacement: String
         ) -> Bool {
             guard let blockTextView = textView as? BlockUITextView else { return true }
-            if replacement == "\n", let onEnter = blockTextView.onEnter {
-                blockTextView.resignFirstResponder()
-                onEnter(range.location)
+            if replacement == "\n", blockTextView.onEnter != nil {
+                blockTextView.onEnterWithSelection?(range)
                 return false
             }
             if replacement == "/",
@@ -170,6 +174,19 @@ struct BlockTextView: UIViewRepresentable {
                 return false
             }
             return true
+        }
+
+        func handleEnter(range: NSRange, in textView: BlockUITextView) {
+            if range.length > 0 {
+                isEditing = true
+                let currentText = textView.text as NSString
+                textView.text = currentText.replacingCharacters(in: range, with: "")
+                textView.selectedRange = NSRange(location: range.location, length: 0)
+                text = textView.text
+            }
+            textView.resignFirstResponder()
+            textView.onEnter?(range.location)
+            isEditing = false
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
@@ -218,6 +235,7 @@ final class BlockUITextView: UITextView {
         didSet { setNeedsDisplay() }
     }
     var onEnter: ((_ cursorOffset: Int) -> Void)?
+    var onEnterWithSelection: ((_ range: NSRange) -> Void)?
     var onBackspaceAtStart: (() -> Void)?
     var onArrowUp: ((_ cursorX: CGFloat) -> Void)?
     var onArrowDown: ((_ cursorX: CGFloat) -> Void)?
@@ -246,8 +264,12 @@ final class BlockUITextView: UITextView {
 
     override func insertText(_ text: String) {
         if text == "\n", let onEnter {
-            resignFirstResponder()
-            onEnter(selectedRange.location)
+            if let onEnterWithSelection {
+                onEnterWithSelection(selectedRange)
+            } else {
+                resignFirstResponder()
+                onEnter(selectedRange.location)
+            }
             return
         }
         if text == "\t", let onTab {
@@ -284,9 +306,13 @@ final class BlockUITextView: UITextView {
         }
         switch key.keyCode {
         case .keyboardReturnOrEnter:
-            if let onEnter {
-                resignFirstResponder()
-                onEnter(selectedRange.location)
+            if onEnter != nil {
+                if let onEnterWithSelection {
+                    onEnterWithSelection(selectedRange)
+                } else {
+                    resignFirstResponder()
+                    onEnter?(selectedRange.location)
+                }
             } else {
                 super.pressesBegan(presses, with: event)
             }

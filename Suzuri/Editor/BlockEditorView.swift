@@ -2,10 +2,12 @@ import SwiftUI
 import UIKit
 
 /// Scrollable block-list container with focus scrolling, insertion transitions, and multi-select.
+@MainActor
 struct BlockEditorView: View {
     @Environment(BlockEditorDocument.self) private var document
 
     @State private var multiSelection = MultiBlockSelection()
+    @State private var focusedListItemID: UUID?
     @State private var isTextSelectionToolbarVisible = false
 
     var body: some View {
@@ -17,11 +19,13 @@ struct BlockEditorView: View {
                             BlockRowView(
                                 block: block,
                                 isBlockSelected: multiSelection.selectedBlockIDs.contains(block.id),
+                                isMultiSelectionActive: multiSelection.isActive,
                                 onTap: { handleTap(on: block.id) },
                                 onSelectionChange: { range, _ in
                                     isTextSelectionToolbarVisible = range.length > 0
                                         && !multiSelection.isActive
-                                }
+                                },
+                                focusedListItemID: $focusedListItemID
                             )
                             .id(block.id)
                             .transition(.asymmetric(
@@ -101,6 +105,9 @@ struct BlockEditorView: View {
                 .frame(height: 20)
             Button("完成") {
                 multiSelection.clear()
+                document.focusedBlockID = nil
+                document.pendingCursorOffset = nil
+                focusedListItemID = nil
             }
             .font(.caption.weight(.semibold))
             .foregroundStyle(Color.brand600)
@@ -135,6 +142,8 @@ struct BlockEditorView: View {
             isTextSelectionToolbarVisible = false
             return
         }
+        document.focusedBlockID = nil
+        document.pendingCursorOffset = nil
         multiSelection.toggle(blockID)
         if !multiSelection.isActive {
             isTextSelectionToolbarVisible = false
@@ -142,6 +151,8 @@ struct BlockEditorView: View {
     }
 
     private func enterMultiSelection(with blockID: BlockID) {
+        document.focusedBlockID = nil
+        document.pendingCursorOffset = nil
         if multiSelection.isActive {
             multiSelection.selectedBlockIDs.insert(blockID)
             multiSelection.anchorID = multiSelection.anchorID ?? blockID
@@ -163,6 +174,9 @@ struct BlockEditorView: View {
     private func deleteSelectedBlocks() {
         let selectedIDs = multiSelection.selectedBlockIDs
         multiSelection.clear()
+        focusedListItemID = nil
+        document.focusedBlockID = nil
+        document.pendingCursorOffset = nil
         guard let fallbackIndex = document.removeBlocks(ids: selectedIDs),
               fallbackIndex < document.blocks.count
         else { return }

@@ -6,6 +6,7 @@ import SwiftUI
 /// 账号匿名注册，token 存 Keychain，重启仍在。
 /// D4 仅改视觉：`AppBackground` 背景、发布栏玻璃容器 + `AppGlassButton`、
 /// 大标题/作者胶囊样式；**不改 APIClient/Models/发布流程逻辑**。
+@MainActor
 struct EditorScreen: View {
     @State private var title: String = ""
     @State private var authorName: String = ""

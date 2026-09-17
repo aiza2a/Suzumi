@@ -2,16 +2,19 @@ import SwiftUI
 import UIKit
 
 /// Renders one document block, its focus chrome, and the block gutter controls.
+@MainActor
 struct BlockRowView: View {
     let block: Block
     @Environment(BlockEditorDocument.self) private var document
 
     var isBlockSelected = false
+    var isMultiSelectionActive = false
     var onTap: (() -> Void)?
     var onSelectionChange: ((_ range: NSRange, _ screenRect: CGRect?) -> Void)?
+    var focusedListItemID: Binding<UUID?>? = nil
 
     @State private var showSlashCommand = false
-    @State private var focusedListItemID: UUID?
+    @State private var localFocusedListItemID: UUID?
     @State private var dragOffset: CGFloat = 0
 
     private var isFocused: Bool {
@@ -41,7 +44,7 @@ struct BlockRowView: View {
         .animation(AppAnimation.blockFocus, value: isFocused)
         .animation(AppAnimation.blockFocus, value: isBlockSelected)
         .onTapGesture {
-            if !block.isListBlock {
+            if !isMultiSelectionActive, !block.isListBlock {
                 focusRow()
             }
             onTap?()
@@ -85,12 +88,6 @@ struct BlockRowView: View {
 
     private var addBlockMenu: some View {
         Menu {
-            Button {
-                insertBlock(of: .text)
-            } label: {
-                Label("New text block", systemImage: BlockType.text.icon)
-            }
-            Divider()
             ForEach(BlockType.groupedByCategory, id: \.category) { group in
                 Section(group.category.rawValue) {
                     ForEach(group.types, id: \.self) { type in
@@ -317,7 +314,7 @@ struct BlockRowView: View {
                 text: listItemBinding(blockID: blockID, itemID: item.id),
                 font: .preferredFont(forTextStyle: .body),
                 isFocused: isFocused
-                    && (focusedListItemID ?? firstListItemID(in: block)) == item.id,
+                    && activeListItemID(for: block) == item.id,
                 placeholder: "列表项",
                 onEnter: { offset in
                     splitListItem(
@@ -361,9 +358,12 @@ struct BlockRowView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
+            guard !isMultiSelectionActive else { return }
+            let isChangingFocus = document.focusedBlockID != blockID
+                || activeListItemID(for: block) != item.id
             document.focusedBlockID = blockID
-            focusedListItemID = item.id
-            document.pendingCursorOffset = item.text.utf16.count
+            setFocusedListItemID(item.id)
+            document.pendingCursorOffset = isChangingFocus ? item.text.utf16.count : nil
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(item.text.isEmpty ? "Empty list item" : item.text)
@@ -522,6 +522,32 @@ struct BlockRowView: View {
         )
     }
 
+    private var focusedListItemValue: UUID? {
+        focusedListItemID?.wrappedValue ?? localFocusedListItemID
+    }
+
+    private func setFocusedListItemID(_ value: UUID?) {
+        if let focusedListItemID {
+            focusedListItemID.wrappedValue = value
+        } else {
+            localFocusedListItemID = value
+        }
+    }
+
+    private func activeListItemID(for block: Block) -> UUID? {
+        let itemIDs: [UUID]
+        switch block {
+        case let .bulletList(_, items), let .numberedList(_, items):
+            itemIDs = items.map(\.id)
+        default:
+            return nil
+        }
+        guard let candidate = focusedListItemValue, itemIDs.contains(candidate) else {
+            return itemIDs.first
+        }
+        return candidate
+    }
+
     private func listItems(for blockID: BlockID) -> [ListItem]? {
         guard let current = document.block(for: blockID) else { return nil }
         switch current {
@@ -559,7 +585,7 @@ struct BlockRowView: View {
             atOffset: offset
         ) else { return }
         document.focusedBlockID = blockID
-        focusedListItemID = newItemID
+        setFocusedListItemID(newItemID)
         document.pendingCursorOffset = 0
     }
 
@@ -573,11 +599,11 @@ struct BlockRowView: View {
             let previous = items[itemIndex - 1]
             updateListItem(blockID: blockID, itemID: previous.id, text: previous.text + item.text)
             document.deleteListItem(in: blockID, at: item.id)
-            focusedListItemID = previous.id
+            setFocusedListItemID(previous.id)
             document.pendingCursorOffset = previous.text.utf16.count
         } else if item.text.isEmpty, items.count > 1 {
             document.deleteListItem(in: blockID, at: item.id)
-            focusedListItemID = items[1].id
+            setFocusedListItemID(items[1].id)
             document.pendingCursorOffset = 0
         } else if item.text.isEmpty {
             removeCurrentBlockAndFocusPrevious(id: blockID)
@@ -608,14 +634,14 @@ struct BlockRowView: View {
                 moveToPreviousBlock(from: blockID)
                 return
             }
-            focusedListItemID = items[index - 1].id
+            setFocusedListItemID(items[index - 1].id)
             document.pendingCursorOffset = items[index - 1].text.utf16.count
         case .down:
             guard index + 1 < items.count else {
                 moveToNextBlock(from: blockID)
                 return
             }
-            focusedListItemID = items[index + 1].id
+            setFocusedListItemID(items[index + 1].id)
             document.pendingCursorOffset = 0
         }
         document.focusedBlockID = blockID
@@ -653,10 +679,35 @@ struct BlockRowView: View {
     }
 
     private func turnInto(_ type: BlockType) {
-        let text = block.textContent ?? firstListText(in: block)
-        let replacement = type.makeBlock(id: block.id, text: text)
-        document.replaceBlock(id: block.id, with: replacement)
+        document.replaceBlock(id: block.id, with: turnedBlock(type))
         focusBlock(id: block.id, cursorAtEnd: false)
+    }
+
+    private func turnedBlock(_ type: BlockType) -> Block {
+        switch block {
+        case let .bulletList(id, items):
+            return turnedList(items: items, id: id, type: type)
+        case let .numberedList(id, items):
+            return turnedList(items: items, id: id, type: type)
+        default:
+            return type.makeBlock(id: block.id, text: block.textContent ?? "")
+        }
+    }
+
+    private func turnedList(
+        items: [ListItem],
+        id: BlockID,
+        type: BlockType
+    ) -> Block {
+        switch type {
+        case .bulletList:
+            return .bulletList(id: id, items: items)
+        case .numberedList:
+            return .numberedList(id: id, items: items)
+        default:
+            let text = items.map(\.text).joined(separator: "\n")
+            return type.makeBlock(id: id, text: text)
+        }
     }
 
     private func duplicateBlock() {
@@ -700,16 +751,24 @@ struct BlockRowView: View {
     }
 
     private func focusRow() {
+        let isChangingFocus = document.focusedBlockID != block.id
         if block.isListBlock {
-            focusedListItemID = firstListItemID(in: block)
+            setFocusedListItemID(firstListItemID(in: block))
             document.focusedBlockID = block.id
-            document.pendingCursorOffset = firstListItemText(in: block).utf16.count
+            document.pendingCursorOffset = isChangingFocus
+                ? firstListItemText(in: block).utf16.count
+                : nil
         } else {
+            if !isChangingFocus {
+                document.pendingCursorOffset = nil
+                return
+            }
             focusBlock(id: block.id, cursorAtEnd: true)
         }
     }
 
     private func focusBlock(id: BlockID, cursorAtEnd: Bool) {
+        setFocusedListItemID(nil)
         document.focusedBlockID = id
         guard cursorAtEnd else {
             document.pendingCursorOffset = 0
@@ -726,6 +785,7 @@ struct BlockRowView: View {
         guard let text = document.block(for: id)?.textContent else { return }
         let characterOffset = characterOffset(fromUTF16: utf16Offset, in: text)
         guard let newID = document.splitBlock(id: id, atOffset: characterOffset) else { return }
+        setFocusedListItemID(nil)
         document.focusedBlockID = newID
         document.pendingCursorOffset = 0
     }
@@ -751,7 +811,9 @@ struct BlockRowView: View {
         document.focusedBlockID = previous.id
         document.pendingCursorOffset = previous.textContent?.utf16.count ?? 0
         if previous.isListBlock {
-            focusedListItemID = lastListItemID(in: previous)
+            setFocusedListItemID(lastListItemID(in: previous))
+        } else {
+            setFocusedListItemID(nil)
         }
     }
 
@@ -761,7 +823,9 @@ struct BlockRowView: View {
         document.focusedBlockID = next.id
         document.pendingCursorOffset = 0
         if next.isListBlock {
-            focusedListItemID = firstListItemID(in: next)
+            setFocusedListItemID(firstListItemID(in: next))
+        } else {
+            setFocusedListItemID(nil)
         }
     }
 
@@ -769,17 +833,9 @@ struct BlockRowView: View {
         guard let removedIndex = document.removeBlock(id: id) else { return }
         guard removedIndex < document.blocks.count else { return }
         let target = document.blocks[removedIndex]
+        setFocusedListItemID(nil)
         document.focusedBlockID = target.id
         document.pendingCursorOffset = target.textContent?.utf16.count ?? 0
-    }
-
-    private func firstListText(in block: Block) -> String {
-        switch block {
-        case let .bulletList(_, items), let .numberedList(_, items):
-            items.first?.text ?? ""
-        default:
-            ""
-        }
     }
 
     private func firstListItemID(in block: Block) -> UUID? {

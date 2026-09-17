@@ -1,6 +1,7 @@
 import SwiftUI
 
 /// Sheet presented when an empty block receives `/` at its beginning.
+@MainActor
 struct SlashCommandMenu: View {
     @Binding var isPresented: Bool
     let blockID: BlockID
