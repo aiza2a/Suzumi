@@ -67,14 +67,21 @@ final class BlockFigureTests: XCTestCase {
         XCTAssertEqual(nodes.map(\.tag), ["p", "h3", "h4"])
     }
 
-    func testFigureWithoutImageStillEncodesCaptionOnly() throws {
+    func testFigureWithoutImageWithCaptionDegradesToParagraph() throws {
         let block = Block.figure(id: UUID(), imageURL: nil, caption: "待上传")
-        let figure = try XCTUnwrap(BlockEncoder.toNodes([block]).first)
+        let node = try XCTUnwrap(BlockEncoder.toNodes([block]).first)
 
-        XCTAssertEqual(children(of: figure).count, 1)
-        guard case .node(let caption) = try XCTUnwrap(children(of: figure).first) else {
-            return XCTFail("应只有 figcaption 节点")
+        XCTAssertEqual(node.tag, "p")
+        guard case .text(let text) = try XCTUnwrap(node.children?.first) else {
+            return XCTFail("退化后的 paragraph 应包含文本节点")
         }
-        XCTAssertEqual(caption.tag, "figcaption")
+        XCTAssertEqual(text, "待上传")
+    }
+
+    func testFigureWithoutImageAndCaptionIsFiltered() {
+        let block = Block.figure(id: UUID(), imageURL: nil, caption: "")
+
+        XCTAssertNil(BlockEncoder.toNode(block))
+        XCTAssertTrue(BlockEncoder.toNodes([block]).isEmpty)
     }
 }

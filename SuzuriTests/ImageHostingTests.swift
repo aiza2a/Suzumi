@@ -33,14 +33,24 @@ private final class ImageHostingMockURLProtocol: URLProtocol, @unchecked Sendabl
     override func stopLoading() {}
 }
 
+private actor ImageHostingCallCounter {
+    private(set) var calls: [String] = []
+
+    func record(_ id: String) {
+        calls.append(id)
+    }
+}
+
 private struct ImageHostingStub: ImageHosting {
     let id: String
     let result: Result<URL, HostError>
+    let counter: ImageHostingCallCounter
 
     var displayName: String { id }
 
     func upload(_ data: Data, filename: String, mimeType: String) async throws -> URL {
-        try result.get()
+        await counter.record(id)
+        return try result.get()
     }
 }
 
@@ -76,6 +86,8 @@ final class ImageHostingTests: XCTestCase {
         let result = try await host.upload(Data("image".utf8), filename: "a.jpg", mimeType: "image/jpeg")
 
         XCTAssertEqual(result.absoluteString, "https://qu.ax/abc")
+        XCTAssertEqual(ImageHostingMockURLProtocol.lastRequest?.httpMethod, "POST")
+        XCTAssertEqual(ImageHostingMockURLProtocol.lastRequest?.url, QuAxHost.endpoint)
     }
 
     func testQuAxFailureThrowsUploadFailed() async {
@@ -131,6 +143,11 @@ final class ImageHostingTests: XCTestCase {
         let result = try await host.upload(Data(), filename: "a.png", mimeType: "image/png")
 
         XCTAssertEqual(result.absoluteString, "https://telegraph-image.pages.dev/file/a.png")
+        XCTAssertEqual(ImageHostingMockURLProtocol.lastRequest?.httpMethod, "POST")
+        XCTAssertEqual(
+            ImageHostingMockURLProtocol.lastRequest?.url?.absoluteString,
+            "https://telegraph-image.pages.dev/upload"
+        )
     }
 
     func testTelegraphCompatKeepsAbsoluteSource() async throws {
@@ -165,25 +182,52 @@ final class ImageHostingTests: XCTestCase {
 
         let request = try XCTUnwrap(ImageHostingMockURLProtocol.lastRequest)
         let contentType = try XCTUnwrap(request.value(forHTTPHeaderField: "Content-Type"))
-        XCTAssertTrue(contentType.hasPrefix("multipart/form-data; boundary="))
-        XCTAssertTrue(String(data: try XCTUnwrap(request.httpBody), encoding: .utf8)?.contains(
-            "name=\"file\"; filename=\"a.png\""
-        ) == true)
+        let boundaryPrefix = "multipart/form-data; boundary="
+        XCTAssertTrue(contentType.hasPrefix(boundaryPrefix))
+        let boundary = String(contentType.dropFirst(boundaryPrefix.count))
+        let body = try XCTUnwrap(String(data: try XCTUnwrap(request.httpBody), encoding: .utf8))
+        XCTAssertTrue(body.contains("--\(boundary)\r\n"))
+        XCTAssertTrue(body.contains("--\(boundary)--\r\n"))
+        XCTAssertTrue(body.contains("name=\"file\"; filename=\"a.png\""))
     }
 
     func testUploadServiceFallsBackToNextHost() async throws {
-        let first = ImageHostingStub(id: "first", result: .failure(.transport))
-        let second = ImageHostingStub(id: "second", result: .success(testURL))
+        let firstCounter = ImageHostingCallCounter()
+        let secondCounter = ImageHostingCallCounter()
+        let first = ImageHostingStub(
+            id: "first",
+            result: .failure(.transport),
+            counter: firstCounter
+        )
+        let second = ImageHostingStub(
+            id: "second",
+            result: .success(testURL),
+            counter: secondCounter
+        )
         let service = ImageUploadService(hosts: [first, second])
 
         let result = try await service.upload(Data(), filename: "a.jpg", mimeType: "image/jpeg")
 
         XCTAssertEqual(result, testURL)
+        let firstCalls = await firstCounter.calls
+        let secondCalls = await secondCounter.calls
+        XCTAssertEqual(firstCalls, ["first"])
+        XCTAssertEqual(secondCalls, ["second"])
     }
 
     func testUploadServiceThrowsLastErrorWhenAllHostsFail() async {
-        let first = ImageHostingStub(id: "first", result: .failure(.transport))
-        let second = ImageHostingStub(id: "second", result: .failure(.uploadFailed("last")))
+        let firstCounter = ImageHostingCallCounter()
+        let secondCounter = ImageHostingCallCounter()
+        let first = ImageHostingStub(
+            id: "first",
+            result: .failure(.transport),
+            counter: firstCounter
+        )
+        let second = ImageHostingStub(
+            id: "second",
+            result: .failure(.uploadFailed("last")),
+            counter: secondCounter
+        )
         let service = ImageUploadService(hosts: [first, second])
 
         do {
@@ -194,6 +238,10 @@ final class ImageHostingTests: XCTestCase {
         } catch {
             XCTFail("应为 HostError，实际为 \(error)")
         }
+        let firstCalls = await firstCounter.calls
+        let secondCalls = await secondCounter.calls
+        XCTAssertEqual(firstCalls, ["first"])
+        XCTAssertEqual(secondCalls, ["second"])
     }
 
     func testUploadServiceWithNoHostsThrowsNoHostsError() async {

@@ -70,14 +70,14 @@ enum Block: Identifiable, Hashable, Codable {
 /// 将编辑器块编码为 Telegraph Node。
 enum BlockEncoder {
     static func toNodes(_ blocks: [Block]) -> [TelegraphNode] {
-        blocks.map(toNode)
+        blocks.compactMap(toNode)
     }
 
     static func toNodes(from blocks: [Block]) -> [TelegraphNode] {
         toNodes(blocks)
     }
 
-    static func toNode(_ block: Block) -> TelegraphNode {
+    static func toNode(_ block: Block) -> TelegraphNode? {
         switch block {
         case .paragraph(_, let text):
             return TelegraphNode(tag: "p", attrs: nil, children: [.text(text)])
@@ -85,14 +85,19 @@ enum BlockEncoder {
             let tag = level == 1 ? "h3" : "h4"
             return TelegraphNode(tag: tag, attrs: nil, children: [.text(text)])
         case .figure(_, let imageURL, let caption):
-            var children: [TelegraphNode.NodeChild] = []
-            if let imageURL {
-                children.append(.node(TelegraphNode(
+            guard let imageURL else {
+                return caption.isEmpty
+                    ? nil
+                    : TelegraphNode(tag: "p", attrs: nil, children: [.text(caption)])
+            }
+
+            var children: [TelegraphNode.NodeChild] = [
+                .node(TelegraphNode(
                     tag: "img",
                     attrs: ["src": imageURL.absoluteString],
                     children: nil
-                )))
-            }
+                ))
+            ]
             if !caption.isEmpty {
                 children.append(.node(TelegraphNode(
                     tag: "figcaption",
