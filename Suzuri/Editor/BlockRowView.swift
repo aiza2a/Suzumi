@@ -96,11 +96,9 @@ struct BlockRowView: View {
                 document: document,
                 isImageActionEnabled: isImageActionEnabled,
                 onImageData: { data, targetID in
-                    guard let targetID else { return }
                     onImageData?(data, targetID)
                 },
                 onImageError: { error, targetID in
-                    guard let targetID else { return }
                     onImageError?(error, targetID)
                 },
                 onImagePickerLoadingChanged: onImagePickerLoadingChanged
