@@ -29,7 +29,7 @@ jobs:
         env:
           BUILD_NUMBER: ${{ github.run_number }}
         run: |
-          echo "Building marketing version 0.1.0, CI build ${BUILD_NUMBER}"
+          echo "Building marketing version 0.1.1, CI build ${BUILD_NUMBER}"
           xcodebuild archive \
             -project Suzuri.xcodeproj \
             -scheme Suzuri \
