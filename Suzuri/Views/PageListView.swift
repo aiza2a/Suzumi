@@ -34,6 +34,7 @@ struct PageListView: View {
     @State private var errorMessage: String?
     @State private var canRetryError = false
     @State private var path: [Destination] = []
+    @State private var isShowingSettings = false
 
     init(
         sessionController: SessionController,
@@ -147,8 +148,8 @@ struct PageListView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    NavigationLink {
-                        SettingsView(sessionController: sessionController)
+                    Button {
+                        isShowingSettings = true
                     } label: {
                         Image(systemName: "gearshape")
                     }
@@ -175,6 +176,13 @@ struct PageListView: View {
                         draftStore: draftStore
                     )
                 }
+            }
+            .sheet(isPresented: $isShowingSettings) {
+                NavigationStack {
+                    SettingsView(sessionController: sessionController, showsDoneButton: true)
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
             }
             .task {
                 guard !hasLoaded else { return }
@@ -477,7 +485,7 @@ private struct DraftRowView: View {
                 HStack {
                     Text(draft.isPublished ? "已发布" : "未发布")
                     Spacer()
-                    Text(draft.updatedAt, style: .relative)
+                    Text(SuzuriTimeLabel.string(from: draft.updatedAt))
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -505,7 +513,7 @@ private struct PageRowView: View {
                 HStack(spacing: 12) {
                     Label("\(page.views)", systemImage: "eye")
                         .monospacedDigit()
-                    Text(lastSeen ?? Date(), style: .relative)
+                    Text(SuzuriTimeLabel.string(from: lastSeen ?? Date()))
                     Spacer()
                     Image(systemName: page.canEdit ? "pencil" : "lock")
                         .foregroundStyle(.tertiary)

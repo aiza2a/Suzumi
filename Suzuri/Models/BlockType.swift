@@ -19,23 +19,23 @@ enum BlockType: String, CaseIterable, Identifiable, Hashable {
     var displayName: String {
         switch self {
         case .text:
-            "Text"
+            "文本"
         case .heading:
-            "Heading"
+            "标题"
         case .quote:
-            "Quote"
+            "引用"
         case .bulletList:
-            "Bullet List"
+            "无序列表"
         case .numberedList:
-            "Numbered List"
+            "有序列表"
         case .code:
-            "Code"
+            "代码"
         case .divider:
-            "Divider"
+            "分割线"
         case .figure:
-            "Figure"
+            "图片"
         case .link:
-            "Link"
+            "链接"
         }
     }
 
@@ -73,6 +73,19 @@ enum BlockType: String, CaseIterable, Identifiable, Hashable {
         case lists = "Lists"
         case media = "Media"
         case advanced = "Advanced"
+
+        var displayName: String {
+            switch self {
+            case .text:
+                "文本"
+            case .lists:
+                "列表"
+            case .media:
+                "媒体"
+            case .advanced:
+                "高级"
+            }
+        }
     }
 
     var category: Category {

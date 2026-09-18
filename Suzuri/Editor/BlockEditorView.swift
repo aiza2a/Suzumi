@@ -1,6 +1,20 @@
 import SwiftUI
 import UIKit
 
+private struct BlockRowFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [BlockID: CGRect] = [:]
+
+    static func reduce(value: inout [BlockID: CGRect], nextValue: () -> [BlockID: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct BlockDragSession {
+    let blockID: BlockID
+    var originY: CGFloat
+    var hasMoved = false
+}
+
 /// Scrollable block-list container with focus scrolling, insertion transitions, and multi-select.
 @MainActor
 struct BlockEditorView: View {
@@ -9,10 +23,21 @@ struct BlockEditorView: View {
 
     /// Read-only pages keep selection chrome visible but disable every mutation path.
     var isEditable: Bool = true
+    var isImageActionEnabled: Bool = true
+    var uploadingFigureID: BlockID? = nil
+    var onImageData: ((Data, BlockID?) -> Void)? = nil
+    var onImageError: ((Error, BlockID?) -> Void)? = nil
+    var onImagePickerLoadingChanged: ((Bool) -> Void)? = nil
 
     @State private var multiSelection = MultiBlockSelection()
     @State private var focusedListItemID: UUID?
     @State private var isTextSelectionToolbarVisible = false
+    @State private var blockFrames: [BlockID: CGRect] = [:]
+    @State private var dragSession: BlockDragSession?
+
+    private var blockOrder: [BlockID] {
+        document.blocks.map(\.id)
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -25,14 +50,63 @@ struct BlockEditorView: View {
                                 isEditable: isEditable,
                                 isBlockSelected: multiSelection.selectedBlockIDs.contains(block.id),
                                 isMultiSelectionActive: multiSelection.isActive,
+                                isBeingDragged: dragSession?.blockID == block.id,
+                                isImageActionEnabled: isImageActionEnabled,
+                                uploadingFigureID: uploadingFigureID,
                                 onTap: { handleTap(on: block.id) },
                                 onSelectionChange: { range, _ in
+                                    if range.length > 0 {
+                                        dragSession = nil
+                                    }
                                     isTextSelectionToolbarVisible = range.length > 0
                                         && !multiSelection.isActive
                                 },
-                                focusedListItemID: $focusedListItemID
+                                focusedListItemID: $focusedListItemID,
+                                onImageData: onImageData,
+                                onImageError: onImageError,
+                                onImagePickerLoadingChanged: onImagePickerLoadingChanged,
+                                onRowDragBegan: {
+                                    beginDragSession(for: block.id)
+                                },
+                                onRowDragChanged: { startY, locationY in
+                                    handleRowDragChanged(
+                                        blockID: block.id,
+                                        startY: startY,
+                                        locationY: locationY
+                                    )
+                                },
+                                onRowDragEnded: { startY, locationY, entersMultiSelection in
+                                    handleRowDragEnded(
+                                        blockID: block.id,
+                                        startY: startY,
+                                        locationY: locationY,
+                                        entersMultiSelection: entersMultiSelection
+                                    )
+                                },
+                                onHandleDragChanged: { startY, locationY in
+                                    handleHandleDragChanged(
+                                        blockID: block.id,
+                                        startY: startY,
+                                        locationY: locationY
+                                    )
+                                },
+                                onHandleDragEnded: { startY, locationY in
+                                    handleHandleDragEnded(
+                                        blockID: block.id,
+                                        startY: startY,
+                                        locationY: locationY
+                                    )
+                                }
                             )
                             .id(block.id)
+                            .background {
+                                GeometryReader { proxy in
+                                    Color.clear.preference(
+                                        key: BlockRowFramePreferenceKey.self,
+                                        value: [block.id: proxy.frame(in: .global)]
+                                    )
+                                }
+                            }
                             .transition(reduceMotion ? .identity : .asymmetric(
                                 insertion: .opacity.combined(
                                     with: .scale(scale: 0.96, anchor: .top)
@@ -41,19 +115,15 @@ struct BlockEditorView: View {
                                     with: .scale(scale: 0.94, anchor: .top)
                                 )
                             ))
-                            .simultaneousGesture(
-                                LongPressGesture(minimumDuration: 0.4)
-                                    .onEnded { _ in
-                                        guard isEditable else { return }
-                                        enterMultiSelection(with: block.id)
-                                    }
-                            )
                         }
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, multiSelection.isActive ? 58 : 16)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .onPreferenceChange(BlockRowFramePreferenceKey.self) { frames in
+                    blockFrames = frames
+                }
                 .onChange(of: document.focusedBlockID) { _, newID in
                     guard let newID, document.index(of: newID) != nil else { return }
                     withAnimation(reduceMotion ? nil : AppAnimation.fadeSlow) {
@@ -79,11 +149,24 @@ struct BlockEditorView: View {
             }
         }
         .animation(reduceMotion ? nil : AppAnimation.listInsert, value: document.blocks.count)
+        .animation(reduceMotion ? nil : AppAnimation.listInsert, value: blockOrder)
         .animation(reduceMotion ? nil : AppAnimation.pop, value: multiSelection.isActive)
         .onChange(of: multiSelection.isActive) { _, isActive in
             if isActive {
+                dragSession = nil
                 isTextSelectionToolbarVisible = false
             }
+        }
+        .onChange(of: isEditable) { _, editable in
+            if !editable {
+                dragSession = nil
+            }
+        }
+        .onChange(of: reduceMotion) { _, _ in
+            dragSession = nil
+        }
+        .onDisappear {
+            dragSession = nil
         }
     }
 
@@ -174,9 +257,10 @@ struct BlockEditorView: View {
     }
 
     private func enterMultiSelection(with blockID: BlockID) {
-        guard isEditable else { return }
+        guard isEditable, dragSession == nil else { return }
         document.focusedBlockID = nil
         document.pendingCursorOffset = nil
+        focusedListItemID = nil
         if multiSelection.isActive {
             multiSelection.selectedBlockIDs.insert(blockID)
             multiSelection.anchorID = multiSelection.anchorID ?? blockID
@@ -185,6 +269,130 @@ struct BlockEditorView: View {
             multiSelection.anchorID = blockID
         }
         isTextSelectionToolbarVisible = false
+    }
+
+    private func handleRowDragChanged(
+        blockID: BlockID,
+        startY: CGFloat,
+        locationY: CGFloat
+    ) {
+        guard isEditable, !multiSelection.isActive else {
+            dragSession = nil
+            return
+        }
+        if dragSession == nil {
+            beginDragSession(for: blockID, originY: startY)
+        }
+        updateDragSession(for: blockID, startY: startY, locationY: locationY)
+    }
+
+    private func handleRowDragEnded(
+        blockID: BlockID,
+        startY: CGFloat?,
+        locationY: CGFloat?,
+        entersMultiSelection: Bool
+    ) {
+        if let startY, let locationY {
+            updateDragSession(for: blockID, startY: startY, locationY: locationY)
+        }
+        finishDragSession(
+            for: blockID,
+            entersMultiSelection: entersMultiSelection
+        )
+    }
+
+    private func beginDragSession(for blockID: BlockID, originY: CGFloat? = nil) {
+        guard isEditable,
+              !multiSelection.isActive,
+              dragSession == nil,
+              document.index(of: blockID) != nil
+        else { return }
+
+        document.focusedBlockID = nil
+        document.pendingCursorOffset = nil
+        focusedListItemID = nil
+        dragSession = BlockDragSession(
+            blockID: blockID,
+            originY: originY ?? blockFrames[blockID]?.midY ?? 0
+        )
+
+        let feedback = UIImpactFeedbackGenerator(style: .medium)
+        feedback.prepare()
+        feedback.impactOccurred()
+    }
+
+    private func updateDragSession(
+        for blockID: BlockID,
+        startY: CGFloat,
+        locationY: CGFloat
+    ) {
+        guard isEditable,
+              !multiSelection.isActive,
+              var session = dragSession,
+              session.blockID == blockID
+        else { return }
+
+        if !session.hasMoved {
+            session.originY = startY
+        }
+        session.hasMoved = session.hasMoved || abs(locationY - session.originY) >= 10
+        dragSession = session
+        guard session.hasMoved else { return }
+        moveDraggedBlock(blockID: blockID, locationY: locationY)
+    }
+
+    private func finishDragSession(for blockID: BlockID, entersMultiSelection: Bool) {
+        guard let session = dragSession, session.blockID == blockID else { return }
+        dragSession = nil
+
+        if entersMultiSelection,
+           !session.hasMoved,
+           isEditable,
+           !multiSelection.isActive {
+            enterMultiSelection(with: blockID)
+        }
+    }
+
+    private func moveDraggedBlock(blockID: BlockID, locationY: CGFloat) {
+        guard let sourceIndex = document.index(of: blockID),
+              document.blocks.allSatisfy({ $0.id == blockID || blockFrames[$0.id] != nil })
+        else { return }
+
+        let destination = document.blocks.enumerated().first { _, candidate in
+            candidate.id != blockID && locationY < (blockFrames[candidate.id]?.midY ?? .greatestFiniteMagnitude)
+        }?.offset ?? document.blocks.count
+
+        guard destination != sourceIndex,
+              destination != sourceIndex + 1
+        else { return }
+
+        withAnimation(reduceMotion ? nil : AppAnimation.listInsert) {
+            document.moveBlock(from: sourceIndex, to: destination)
+        }
+    }
+
+    private func handleHandleDragChanged(
+        blockID: BlockID,
+        startY: CGFloat,
+        locationY: CGFloat
+    ) {
+        guard isEditable, !multiSelection.isActive else {
+            dragSession = nil
+            return
+        }
+        if dragSession == nil {
+            beginDragSession(for: blockID, originY: startY)
+        }
+        updateDragSession(for: blockID, startY: startY, locationY: locationY)
+    }
+
+    private func handleHandleDragEnded(
+        blockID: BlockID,
+        startY: CGFloat,
+        locationY: CGFloat
+    ) {
+        updateDragSession(for: blockID, startY: startY, locationY: locationY)
+        finishDragSession(for: blockID, entersMultiSelection: false)
     }
 
     private func copySelectedBlocks() {

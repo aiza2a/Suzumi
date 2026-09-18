@@ -23,6 +23,7 @@ struct EditorScreen: View {
     @State private var isPublishing = false
     @State private var isPickingImage = false
     @State private var isUploadingImage = false
+    @State private var uploadingFigureID: UUID?
     @State private var isLoadingPage = false
     @State private var isHydrating = true
     @State private var publishedURL: URL?
@@ -40,6 +41,7 @@ struct EditorScreen: View {
     @State private var canRetryError = false
     @State private var imageUploadErrorMessage: String?
     @State private var retryImageData: Data?
+    @State private var retryFigureID: UUID?
     @State private var imageProviderMessage: String?
 
     init(
@@ -102,20 +104,30 @@ struct EditorScreen: View {
                         .submitLabel(.next)
                         .disabled(!canEdit || isHydrating || isPublishing)
 
-                    TextField("作者名（可选）", text: $authorName)
-                        .font(.subheadline)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .appGlass(cornerRadius: 999)
-                        .disabled(!canEdit || isHydrating || isPublishing)
-
                     Divider()
                         .opacity(0.4)
 
                     // D3 block editor owns all structured text, lists, figures, and focus state.
-                    BlockEditorView(isEditable: canEdit && !isHydrating && !isPublishing)
-                        .frame(minHeight: 240, maxHeight: 480)
-                        .environment(document)
+                    BlockEditorView(
+                        isEditable: canEdit && !isHydrating && !isPublishing,
+                        isImageActionEnabled: isImageActionEnabled,
+                        uploadingFigureID: uploadingFigureID,
+                        onImageData: { data, targetID in
+                            Task { @MainActor in
+                                await uploadImage(data, intoFigure: targetID)
+                            }
+                        },
+                        onImageError: { error, targetID in
+                            imageUploadErrorMessage = ErrorPresenter.message(for: error)
+                            retryImageData = nil
+                            retryFigureID = targetID
+                        },
+                        onImagePickerLoadingChanged: { isLoading in
+                            isPickingImage = isLoading
+                        }
+                    )
+                    .frame(minHeight: 240, maxHeight: 480)
+                    .environment(document)
 
                     if let imageProviderMessage {
                         Label(imageProviderMessage, systemImage: "checkmark.circle")
@@ -164,17 +176,12 @@ struct EditorScreen: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 8)
-                .padding(.bottom, 120)
+                .padding(.bottom, 24)
             }
         }
         .navigationTitle(currentPage == nil ? "新文章" : "编辑文章")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
-        .safeAreaInset(edge: .bottom) {
-            if canEdit {
-                publishBar
-            }
-        }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button {
@@ -185,12 +192,27 @@ struct EditorScreen: View {
                 .accessibilityLabel("返回文章列表")
             }
             ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink {
-                    SettingsView(sessionController: sessionController)
+                Button {
+                    Task { @MainActor in await publish() }
                 } label: {
-                    Image(systemName: "gearshape")
+                    Group {
+                        if isPublishing {
+                            ProgressView()
+                                .tint(.white)
+                        } else {
+                            Text("发布")
+                        }
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(minWidth: 58, minHeight: 20)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color.brand600, in: Capsule())
+                    .opacity(canPublish ? 1 : 0.4)
                 }
-                .accessibilityLabel("设置")
+                .disabled(!canPublish)
+                .accessibilityLabel("发布")
             }
         }
         .onAppear {
@@ -201,15 +223,6 @@ struct EditorScreen: View {
         }
         .onChange(of: title) { _, _ in
             markChangedAndScheduleSave()
-        }
-        .onChange(of: authorName) { _, newValue in
-            markChangedAndScheduleSave()
-            if !isHydrating {
-                try? sessionController.updateAuthorProfile(
-                    name: newValue,
-                    url: sessionController.authorURL
-                )
-            }
         }
         .onChange(of: document.blocks) { _, _ in
             markChangedAndScheduleSave()
@@ -246,19 +259,23 @@ struct EditorScreen: View {
                 if !$0 {
                     imageUploadErrorMessage = nil
                     retryImageData = nil
+                    retryFigureID = nil
                 }
             }
         )) {
             if retryImageData != nil {
                 Button("重试") {
                     if let data = retryImageData {
-                        Task { @MainActor in await uploadImage(data) }
+                        Task { @MainActor in
+                            await uploadImage(data, intoFigure: retryFigureID)
+                        }
                     }
                 }
             }
             Button("取消", role: .cancel) {
                 imageUploadErrorMessage = nil
                 retryImageData = nil
+                retryFigureID = nil
             }
         } message: {
             Text(imageUploadErrorMessage ?? "")
@@ -303,53 +320,6 @@ struct EditorScreen: View {
         .sensoryFeedback(.success, trigger: publishedURL)
     }
 
-    /// 底部发布栏：图片选择、草稿状态和发布按钮。
-    private var publishBar: some View {
-        HStack(spacing: 10) {
-            if isUploadingImage {
-                ProgressView("上传中…")
-                    .font(.footnote)
-                    .tint(Color.brand600)
-                    .frame(maxWidth: .infinity)
-            } else {
-                PhotoPickerButton(
-                    onImageData: { data in
-                        Task { @MainActor in await uploadImage(data) }
-                    },
-                    onError: { error in
-                        imageUploadErrorMessage = ErrorPresenter.message(for: error)
-                        retryImageData = nil
-                    },
-                    onLoadingChanged: { isLoading in
-                        isPickingImage = isLoading
-                    }
-                )
-                .disabled(isPublishing || isHydrating || isPickingImage)
-                .frame(maxWidth: .infinity)
-            }
-
-            Circle()
-                .fill(hasContent ? Color.brand600 : Color.secondary.opacity(0.4))
-                .frame(width: 8, height: 8)
-                .accessibilityHidden(true)
-
-            AppGlassButton(
-                title: "发布",
-                systemImage: "paperplane.fill",
-                style: .primary,
-                isLoading: isPublishing
-            ) {
-                Task { @MainActor in await publish() }
-            }
-            .disabled(!canPublish)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .appGlass(cornerRadius: 24)
-        .padding(.horizontal, 12)
-        .padding(.bottom, 4)
-    }
-
     private var hasContent: Bool {
         document.blocks.contains { block in
             if case .divider = block {
@@ -370,6 +340,14 @@ struct EditorScreen: View {
             origin: draftOrigin,
             accountFingerprint: draftAccountFingerprint
         ) != nil
+    }
+
+    private var isImageActionEnabled: Bool {
+        canEdit
+            && !isHydrating
+            && !isPublishing
+            && !isUploadingImage
+            && !isPickingImage
     }
 
     private var canPublish: Bool {
@@ -616,15 +594,28 @@ struct EditorScreen: View {
         }
     }
 
-    /// 统一执行压缩、缓存和上传；成功后把图片块插入当前焦点之后。
-    private func uploadImage(_ sourceData: Data) async {
+    /// 统一执行压缩、缓存和上传；可填充指定图片块或插入当前焦点之后。
+    private func uploadImage(_ sourceData: Data, intoFigure targetID: UUID? = nil) async {
         guard !isCancelled, canEdit, !isHydrating, !isPublishing else { return }
+        guard !isUploadingImage else {
+            retryImageData = sourceData
+            retryFigureID = targetID
+            imageUploadErrorMessage = "已有图片正在上传，请稍后重试"
+            return
+        }
         requestGeneration += 1
         let generation = requestGeneration
         isUploadingImage = true
+        uploadingFigureID = targetID
         imageUploadErrorMessage = nil
         retryImageData = nil
-        defer { isUploadingImage = false }
+        retryFigureID = nil
+        defer {
+            isUploadingImage = false
+            if uploadingFigureID == targetID {
+                uploadingFigureID = nil
+            }
+        }
 
         do {
             if injectedImagePipeline == nil,
@@ -635,13 +626,25 @@ struct EditorScreen: View {
                 ?? ImagePipeline(uploadService: ImageHostConfiguration.makeUploadService())
             let result = try await pipeline.processAndUpload(sourceData)
             guard !isCancelled, generation == requestGeneration else { return }
-            let imageBlock = Block.figure(id: UUID(), imageURL: result.url, caption: "")
-            if let focusedID = document.focusedBlockID,
-               let index = document.index(of: focusedID) {
-                document.insertBlock(imageBlock, at: index + 1)
+
+            if let targetID {
+                guard let current = document.block(for: targetID),
+                      case let .figure(id, _, caption) = current
+                else { return }
+                document.replaceBlock(
+                    id: targetID,
+                    with: .figure(id: id, imageURL: result.url, caption: caption)
+                )
             } else {
-                document.blocks.append(imageBlock)
+                let imageBlock = Block.figure(id: UUID(), imageURL: result.url, caption: "")
+                if let focusedID = document.focusedBlockID,
+                   let index = document.index(of: focusedID) {
+                    document.insertBlock(imageBlock, at: index + 1)
+                } else {
+                    document.blocks.append(imageBlock)
+                }
             }
+
             do {
                 try saveCurrentDraft()
             } catch {
@@ -650,6 +653,7 @@ struct EditorScreen: View {
             imageProviderMessage = "图片已上传（\(result.providerID)）"
         } catch {
             retryImageData = sourceData
+            retryFigureID = targetID
             imageUploadErrorMessage = ErrorPresenter.message(for: error)
         }
     }

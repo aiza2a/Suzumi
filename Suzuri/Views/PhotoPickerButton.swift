@@ -9,21 +9,33 @@ enum PhotoPickerError: Error, Equatable, Sendable {
 
 /// 选择图片并将 PhotosPicker 原始数据交给上层处理。
 struct PhotoPickerButton: View {
+    let label: String
+    let systemImage: String
+    let isEnabled: Bool
     let onImageData: (Data) -> Void
     let onError: ((Error) -> Void)?
     let onLoadingChanged: ((Bool) -> Void)?
+    let onPickerPresented: (() -> Void)?
 
     @State private var selectedItem: PhotosPickerItem?
     @State private var isLoading = false
 
     init(
+        label: String = "添加图片",
+        systemImage: String = "photo",
+        isEnabled: Bool = true,
         onImageData: @escaping (Data) -> Void,
         onError: ((Error) -> Void)? = nil,
-        onLoadingChanged: ((Bool) -> Void)? = nil
+        onLoadingChanged: ((Bool) -> Void)? = nil,
+        onPickerPresented: (() -> Void)? = nil
     ) {
+        self.label = label
+        self.systemImage = systemImage
+        self.isEnabled = isEnabled
         self.onImageData = onImageData
         self.onError = onError
         self.onLoadingChanged = onLoadingChanged
+        self.onPickerPresented = onPickerPresented
     }
 
     var body: some View {
@@ -31,10 +43,16 @@ struct PhotoPickerButton: View {
             if isLoading {
                 ProgressView()
             } else {
-                Label("添加图片", systemImage: "photo")
+                Label(label, systemImage: systemImage)
             }
         }
-        .disabled(isLoading)
+        .disabled(isLoading || !isEnabled)
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                guard isEnabled, !isLoading else { return }
+                onPickerPresented?()
+            }
+        )
         .onChange(of: selectedItem) { _, item in
             guard let item else { return }
             Task { @MainActor in
