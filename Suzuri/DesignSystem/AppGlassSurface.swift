@@ -38,8 +38,9 @@ struct AppGlassSurface: ViewModifier {
                     .allowsHitTesting(false)
             }
             .compositingGroup()
-            .shadow(color: .black.opacity(allowsShadow ? (cs == .dark ? 0.35 : 0.10) : 0),
-                    radius: allowsShadow ? 16 : 0, x: 0, y: allowsShadow ? 6 : 0)
+            .shadow(color: .black.opacity(allowsShadow ? (cs == .dark ? 0.20 : 0.10) : 0),
+                    radius: allowsShadow ? (cs == .dark ? 10 : 16) : 0,
+                    x: 0, y: allowsShadow ? (cs == .dark ? 4 : 6) : 0)
             .suzuriGlassEffectIfAvailable(cornerRadius: cornerRadius)
     }
 }

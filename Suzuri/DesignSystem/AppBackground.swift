@@ -12,41 +12,41 @@ struct AppBackground: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        ZStack {
-            // L1 基底
-            LinearGradient(
-                colors: cs == .dark
-                    ? [Color(red: 0.07, green: 0.06, blue: 0.08), Color(red: 0.03, green: 0.03, blue: 0.04)]
-                    : [Color(red: 0.99, green: 0.98, blue: 0.97), Color(red: 0.96, green: 0.95, blue: 0.94)],
-                startPoint: .topLeading, endPoint: .bottomTrailing)
-
-            // L2 品牌色光斑
-            if reduceMotion {
-                StaticBlob(cs: cs)
-            } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                    let t = context.date.timeIntervalSinceReferenceDate
-                    MorphingBlob(phase: t * 0.05, amplitude: 0.15, points: 14)
-                        .fill(LinearGradient(
-                            colors: [.brand600.opacity(cs == .dark ? 0.22 : 0.10),
-                                     .brand300.opacity(cs == .dark ? 0.10 : 0.06)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing))
-                        .frame(width: 460, height: 460)
-                        .blur(radius: 60)
-                        .offset(x: 180, y: -280)
-                        .blendMode(cs == .dark ? .plusLighter : .normal)
+        // L1 基底
+        LinearGradient(
+            colors: cs == .dark
+                ? [Color(red: 0.07, green: 0.06, blue: 0.08), Color(red: 0.03, green: 0.03, blue: 0.04)]
+                : [Color(red: 0.99, green: 0.98, blue: 0.97), Color(red: 0.96, green: 0.95, blue: 0.94)],
+            startPoint: .topLeading, endPoint: .bottomTrailing)
+            .overlay {
+                // L2 品牌色光斑
+                if reduceMotion {
+                    StaticBlob(cs: cs)
+                } else {
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                        let t = context.date.timeIntervalSinceReferenceDate
+                        MorphingBlob(phase: t * 0.05, amplitude: 0.15, points: 14)
+                            .fill(LinearGradient(
+                                colors: [.brand600.opacity(cs == .dark ? 0.22 : 0.10),
+                                         .brand300.opacity(cs == .dark ? 0.10 : 0.06)],
+                                startPoint: .topLeading, endPoint: .bottomTrailing))
+                            .frame(width: 460, height: 460)
+                            .blur(radius: 60)
+                            .offset(x: 180, y: -280)
+                            .blendMode(cs == .dark ? .plusLighter : .normal)
+                    }
                 }
             }
-
-            // L3 顶部微光
-            LinearGradient(colors: [.white.opacity(0.5), .clear],
-                           startPoint: .top, endPoint: .bottom)
-                .frame(height: 240)
-                .blendMode(.softLight)
-        }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+            .overlay(alignment: .top) {
+                // L3 顶部微光
+                LinearGradient(colors: [.white.opacity(0.5), .clear],
+                               startPoint: .top, endPoint: .bottom)
+                    .frame(height: 240)
+                    .blendMode(.softLight)
+            }
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

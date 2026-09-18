@@ -83,226 +83,224 @@ struct EditorScreen: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                AppBackground()
+        ZStack {
+            AppBackground()
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        ReachabilityBanner(isConnected: reachability.isConnected)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    ReachabilityBanner(isConnected: reachability.isConnected)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if isLoadingPage {
+                        ProgressView("正在拉取文章…")
                             .frame(maxWidth: .infinity, alignment: .leading)
+                    }
 
-                        if isLoadingPage {
-                            ProgressView("正在拉取文章…")
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                    TextField("无标题", text: $title)
+                        .font(.largeTitle.weight(.bold))
+                        .textInputAutocapitalization(.sentences)
+                        .submitLabel(.next)
+                        .disabled(!canEdit || isHydrating || isPublishing)
+
+                    TextField("作者名（可选）", text: $authorName)
+                        .font(.subheadline)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .appGlass(cornerRadius: 999)
+                        .disabled(!canEdit || isHydrating || isPublishing)
+
+                    Divider()
+                        .opacity(0.4)
+
+                    // D3 block editor owns all structured text, lists, figures, and focus state.
+                    BlockEditorView(isEditable: canEdit && !isHydrating && !isPublishing)
+                        .frame(minHeight: 240, maxHeight: 480)
+                        .environment(document)
+
+                    if let imageProviderMessage {
+                        Label(imageProviderMessage, systemImage: "checkmark.circle")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if hasUnsupportedContent {
+                        Label("页面包含暂不支持的内容，发布前请在浏览器中编辑", systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+
+                    if let currentPage, !currentPage.canEdit,
+                       let url = browserURL(for: currentPage) {
+                        Link(destination: url) {
+                            Label("在浏览器打开", systemImage: "safari")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Color.brand600)
                         }
+                        .padding(.top, 4)
+                    }
 
-                        TextField("无标题", text: $title)
-                            .font(.largeTitle.weight(.bold))
-                            .textInputAutocapitalization(.sentences)
-                            .submitLabel(.next)
-                            .disabled(!canEdit || isHydrating || isPublishing)
-
-                        TextField("作者名（可选）", text: $authorName)
-                            .font(.subheadline)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .appGlass(cornerRadius: 999)
-                            .disabled(!canEdit || isHydrating || isPublishing)
-
-                        Divider()
-                            .opacity(0.4)
-
-                        // D3 block editor owns all structured text, lists, figures, and focus state.
-                        BlockEditorView(isEditable: canEdit && !isHydrating && !isPublishing)
-                            .frame(minHeight: 240, maxHeight: 480)
-                            .environment(document)
-
-                        if let imageProviderMessage {
-                            Label(imageProviderMessage, systemImage: "checkmark.circle")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        if hasUnsupportedContent {
-                            Label("页面包含暂不支持的内容，发布前请在浏览器中编辑", systemImage: "exclamationmark.triangle")
-                                .font(.footnote)
-                                .foregroundStyle(.orange)
-                        }
-
-                        if let currentPage, !currentPage.canEdit,
-                           let url = browserURL(for: currentPage) {
-                            Link(destination: url) {
-                                Label("在浏览器打开", systemImage: "safari")
+                    if let url = publishedURL {
+                        AppGlassCard(cornerRadius: 20) {
+                            HStack {
+                                Label("发布成功", systemImage: "checkmark.circle.fill")
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(Color.brand600)
-                            }
-                            .padding(.top, 4)
-                        }
-
-                        if let url = publishedURL {
-                            AppGlassCard(cornerRadius: 20) {
-                                HStack {
-                                    Label("发布成功", systemImage: "checkmark.circle.fill")
+                                Spacer()
+                                ShareLink(item: url) {
+                                    Image(systemName: "square.and.arrow.up")
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(Color.brand600)
-                                    Spacer()
-                                    ShareLink(item: url) {
-                                        Image(systemName: "square.and.arrow.up")
-                                            .font(.subheadline.weight(.semibold))
-                                            .foregroundStyle(Color.brand600)
-                                    }
-                                    .accessibilityLabel("分享链接")
                                 }
-                                Text(url.absoluteString)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .textSelection(.enabled)
-                                    .padding(.top, 2)
+                                .accessibilityLabel("分享链接")
                             }
-                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                            Text(url.absoluteString)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .padding(.top, 2)
                         }
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
-                    .padding(.bottom, 120)
                 }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 120)
             }
-            .navigationTitle(currentPage == nil ? "新文章" : "编辑文章")
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationBarBackButtonHidden(true)
-            .safeAreaInset(edge: .bottom) {
-                if canEdit {
-                    publishBar
+        }
+        .navigationTitle(currentPage == nil ? "新文章" : "编辑文章")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .safeAreaInset(edge: .bottom) {
+            if canEdit {
+                publishBar
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    requestDismiss()
+                } label: {
+                    Image(systemName: "chevron.left")
                 }
+                .accessibilityLabel("返回文章列表")
             }
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        requestDismiss()
-                    } label: {
-                        Image(systemName: "chevron.left")
-                    }
-                    .accessibilityLabel("返回文章列表")
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    SettingsView(sessionController: sessionController)
+                } label: {
+                    Image(systemName: "gearshape")
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink {
-                        SettingsView(sessionController: sessionController)
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("设置")
-                }
+                .accessibilityLabel("设置")
             }
-            .onAppear {
-                isCancelled = false
+        }
+        .onAppear {
+            isCancelled = false
+        }
+        .task {
+            await loadInitialContent()
+        }
+        .onChange(of: title) { _, _ in
+            markChangedAndScheduleSave()
+        }
+        .onChange(of: authorName) { _, newValue in
+            markChangedAndScheduleSave()
+            if !isHydrating {
+                try? sessionController.updateAuthorProfile(
+                    name: newValue,
+                    url: sessionController.authorURL
+                )
             }
-            .task {
-                await loadInitialContent()
-            }
-            .onChange(of: title) { _, _ in
-                markChangedAndScheduleSave()
-            }
-            .onChange(of: authorName) { _, newValue in
-                markChangedAndScheduleSave()
-                if !isHydrating {
-                    try? sessionController.updateAuthorProfile(
-                        name: newValue,
-                        url: sessionController.authorURL
-                    )
-                }
-            }
-            .onChange(of: document.blocks) { _, _ in
-                markChangedAndScheduleSave()
-            }
-            .onChange(of: scenePhase) { _, newPhase in
-                if newPhase == .background {
-                    saveDraftNow()
-                }
-            }
-            .onChange(of: reachability.isConnected) { wasConnected, isConnected in
-                guard !wasConnected, isConnected,
-                      let path = editPath,
-                      isPageLoadError || currentPage?.content == nil
-                else { return }
-                Task { @MainActor in
-                    await refreshPage(
-                        path: path,
-                        preserveLocalDraft: draftStore.loadUnpublished(
-                            pagePath: path,
-                            origin: draftOrigin,
-                            accountFingerprint: draftAccountFingerprint
-                        ) != nil
-                    )
-                }
-            }
-            .onDisappear {
+        }
+        .onChange(of: document.blocks) { _, _ in
+            markChangedAndScheduleSave()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .background {
                 saveDraftNow()
-                isCancelled = true
-                requestGeneration += 1
             }
-            .alert("图片上传失败", isPresented: Binding(
-                get: { imageUploadErrorMessage != nil },
-                set: {
-                    if !$0 {
-                        imageUploadErrorMessage = nil
-                        retryImageData = nil
-                    }
-                }
-            )) {
-                if retryImageData != nil {
-                    Button("重试") {
-                        if let data = retryImageData {
-                            Task { @MainActor in await uploadImage(data) }
-                        }
-                    }
-                }
-                Button("取消", role: .cancel) {
+        }
+        .onChange(of: reachability.isConnected) { wasConnected, isConnected in
+            guard !wasConnected, isConnected,
+                  let path = editPath,
+                  isPageLoadError || currentPage?.content == nil
+            else { return }
+            Task { @MainActor in
+                await refreshPage(
+                    path: path,
+                    preserveLocalDraft: draftStore.loadUnpublished(
+                        pagePath: path,
+                        origin: draftOrigin,
+                        accountFingerprint: draftAccountFingerprint
+                    ) != nil
+                )
+            }
+        }
+        .onDisappear {
+            saveDraftNow()
+            isCancelled = true
+            requestGeneration += 1
+        }
+        .alert("图片上传失败", isPresented: Binding(
+            get: { imageUploadErrorMessage != nil },
+            set: {
+                if !$0 {
                     imageUploadErrorMessage = nil
                     retryImageData = nil
                 }
-            } message: {
-                Text(imageUploadErrorMessage ?? "")
             }
-            .alert(
-                isPageLoadError ? "加载失败" : (isDraftSaveError ? "草稿保存失败" : "发布失败"),
-                isPresented: Binding(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
-            )) {
-                if canRetryError {
-                    Button("重试") {
-                        Task { @MainActor in
-                            if isPageLoadError, let path = editPath {
-                                remoteEditUnavailable = false
-                                await refreshPage(
-                                    path: path,
-                                    preserveLocalDraft: draftStore.loadUnpublished(
-                                        pagePath: path,
-                                        origin: draftOrigin,
-                                        accountFingerprint: draftAccountFingerprint
-                                    ) != nil
-                                )
-                            } else {
-                                await publish()
-                            }
+        )) {
+            if retryImageData != nil {
+                Button("重试") {
+                    if let data = retryImageData {
+                        Task { @MainActor in await uploadImage(data) }
+                    }
+                }
+            }
+            Button("取消", role: .cancel) {
+                imageUploadErrorMessage = nil
+                retryImageData = nil
+            }
+        } message: {
+            Text(imageUploadErrorMessage ?? "")
+        }
+        .alert(
+            isPageLoadError ? "加载失败" : (isDraftSaveError ? "草稿保存失败" : "发布失败"),
+            isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            if canRetryError {
+                Button("重试") {
+                    Task { @MainActor in
+                        if isPageLoadError, let path = editPath {
+                            remoteEditUnavailable = false
+                            await refreshPage(
+                                path: path,
+                                preserveLocalDraft: draftStore.loadUnpublished(
+                                    pagePath: path,
+                                    origin: draftOrigin,
+                                    accountFingerprint: draftAccountFingerprint
+                                ) != nil
+                            )
+                        } else {
+                            await publish()
                         }
                     }
                 }
-                Button("好", role: .cancel) { errorMessage = nil }
-            } message: {
-                Text(errorMessage ?? "")
             }
-            .alert("有未发布草稿，确定退出？", isPresented: $isShowingExitConfirmation) {
-                Button("退出", role: .destructive) {
-                    dismiss()
-                }
-                Button("继续编辑", role: .cancel) {}
-            } message: {
-                Text("当前内容已保存在本地草稿中。退出后仍可从文章列表继续编辑。")
-            }
-            .sensoryFeedback(.success, trigger: publishedURL)
+            Button("好", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
         }
+        .alert("有未发布草稿，确定退出？", isPresented: $isShowingExitConfirmation) {
+            Button("退出", role: .destructive) {
+                dismiss()
+            }
+            Button("继续编辑", role: .cancel) {}
+        } message: {
+            Text("当前内容已保存在本地草稿中。退出后仍可从文章列表继续编辑。")
+        }
+        .sensoryFeedback(.success, trigger: publishedURL)
     }
 
     /// 底部发布栏：图片选择、草稿状态和发布按钮。
