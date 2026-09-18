@@ -165,8 +165,10 @@ struct BlockRowView: View {
                     onRowDragBegan?()
                 case .first(false):
                     onRowDragEnded?(nil, nil, false)
-                case let .second(_, drag):
+                case let .second(_, drag?):
                     onRowDragChanged?(drag.startLocation.y, drag.location.y)
+                case .second(_, nil):
+                    onRowDragEnded?(nil, nil, false)
                 }
             }
             .onEnded { value in
@@ -175,8 +177,10 @@ struct BlockRowView: View {
                     onRowDragEnded?(nil, nil, true)
                 case .first(false):
                     onRowDragEnded?(nil, nil, false)
-                case let .second(_, drag):
+                case let .second(_, drag?):
                     onRowDragEnded?(drag.startLocation.y, drag.location.y, true)
+                case .second(_, nil):
+                    onRowDragEnded?(nil, nil, false)
                 }
             }
     }
