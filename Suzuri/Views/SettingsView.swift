@@ -208,9 +208,6 @@ struct SettingsView: View {
                 Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0")
                     .foregroundStyle(.secondary)
             }
-            Link(destination: URL(string: "https://telegra.ph/api")!) {
-                Label("Telegraph API 文档", systemImage: "link")
-            }
             HStack {
                 Text("开源许可")
                 Spacer()
