@@ -23,6 +23,7 @@ struct BlockEditorView: View {
 
     /// Read-only pages keep selection chrome visible but disable every mutation path.
     var isEditable: Bool = true
+    var isImageActionEnabled: Bool = true
     var uploadingFigureID: BlockID? = nil
     var onImageData: ((Data, BlockID?) -> Void)? = nil
     var onImageError: ((Error, BlockID?) -> Void)? = nil
@@ -50,9 +51,13 @@ struct BlockEditorView: View {
                                 isBlockSelected: multiSelection.selectedBlockIDs.contains(block.id),
                                 isMultiSelectionActive: multiSelection.isActive,
                                 isBeingDragged: dragSession?.blockID == block.id,
+                                isImageActionEnabled: isImageActionEnabled,
                                 uploadingFigureID: uploadingFigureID,
                                 onTap: { handleTap(on: block.id) },
                                 onSelectionChange: { range, _ in
+                                    if range.length > 0 {
+                                        dragSession = nil
+                                    }
                                     isTextSelectionToolbarVisible = range.length > 0
                                         && !multiSelection.isActive
                                 },
@@ -60,6 +65,24 @@ struct BlockEditorView: View {
                                 onImageData: onImageData,
                                 onImageError: onImageError,
                                 onImagePickerLoadingChanged: onImagePickerLoadingChanged,
+                                onRowDragBegan: {
+                                    beginDragSession(for: block.id)
+                                },
+                                onRowDragChanged: { startY, locationY in
+                                    handleRowDragChanged(
+                                        blockID: block.id,
+                                        startY: startY,
+                                        locationY: locationY
+                                    )
+                                },
+                                onRowDragEnded: { startY, locationY, entersMultiSelection in
+                                    handleRowDragEnded(
+                                        blockID: block.id,
+                                        startY: startY,
+                                        locationY: locationY,
+                                        entersMultiSelection: entersMultiSelection
+                                    )
+                                },
                                 onHandleDragChanged: { startY, locationY in
                                     handleHandleDragChanged(
                                         blockID: block.id,
@@ -92,7 +115,6 @@ struct BlockEditorView: View {
                                     with: .scale(scale: 0.94, anchor: .top)
                                 )
                             ))
-                            .simultaneousGesture(reorderGesture(for: block.id))
                         }
                     }
                     .padding(.horizontal, 16)
@@ -249,50 +271,34 @@ struct BlockEditorView: View {
         isTextSelectionToolbarVisible = false
     }
 
-    private func reorderGesture(for blockID: BlockID) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.35)
-            .sequenced(before: DragGesture(minimumDistance: 8, coordinateSpace: .global))
-            .onChanged { value in
-                guard isEditable else {
-                    dragSession = nil
-                    return
-                }
-                guard !multiSelection.isActive else {
-                    dragSession = nil
-                    return
-                }
+    private func handleRowDragChanged(
+        blockID: BlockID,
+        startY: CGFloat,
+        locationY: CGFloat
+    ) {
+        guard isEditable, !multiSelection.isActive else {
+            dragSession = nil
+            return
+        }
+        if dragSession == nil {
+            beginDragSession(for: blockID, originY: startY)
+        }
+        updateDragSession(for: blockID, startY: startY, locationY: locationY)
+    }
 
-                switch value {
-                case .first(true):
-                    beginDragSession(for: blockID)
-                case .first(false):
-                    finishDragSession(for: blockID, entersMultiSelection: false)
-                case let .second(_, drag):
-                    if dragSession == nil {
-                        beginDragSession(for: blockID, originY: drag.startLocation.y)
-                    }
-                    updateDragSession(
-                        for: blockID,
-                        startY: drag.startLocation.y,
-                        locationY: drag.location.y
-                    )
-                }
-            }
-            .onEnded { value in
-                switch value {
-                case .first(true):
-                    finishDragSession(for: blockID, entersMultiSelection: true)
-                case .first(false):
-                    finishDragSession(for: blockID, entersMultiSelection: false)
-                case let .second(_, drag):
-                    updateDragSession(
-                        for: blockID,
-                        startY: drag.startLocation.y,
-                        locationY: drag.location.y
-                    )
-                    finishDragSession(for: blockID, entersMultiSelection: true)
-                }
-            }
+    private func handleRowDragEnded(
+        blockID: BlockID,
+        startY: CGFloat?,
+        locationY: CGFloat?,
+        entersMultiSelection: Bool
+    ) {
+        if let startY, let locationY {
+            updateDragSession(for: blockID, startY: startY, locationY: locationY)
+        }
+        finishDragSession(
+            for: blockID,
+            entersMultiSelection: entersMultiSelection
+        )
     }
 
     private func beginDragSession(for blockID: BlockID, originY: CGFloat? = nil) {

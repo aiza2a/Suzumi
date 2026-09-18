@@ -12,6 +12,7 @@ struct BlockRowView: View {
     var isBlockSelected = false
     var isMultiSelectionActive = false
     var isBeingDragged = false
+    var isImageActionEnabled = true
     var uploadingFigureID: BlockID?
     var onTap: (() -> Void)?
     var onSelectionChange: ((_ range: NSRange, _ screenRect: CGRect?) -> Void)?
@@ -19,6 +20,9 @@ struct BlockRowView: View {
     var onImageData: ((Data, BlockID?) -> Void)? = nil
     var onImageError: ((Error, BlockID?) -> Void)? = nil
     var onImagePickerLoadingChanged: ((Bool) -> Void)? = nil
+    var onRowDragBegan: (() -> Void)? = nil
+    var onRowDragChanged: ((_ startY: CGFloat, _ locationY: CGFloat) -> Void)? = nil
+    var onRowDragEnded: ((_ startY: CGFloat?, _ locationY: CGFloat?, _ entersMultiSelection: Bool) -> Void)? = nil
     var onHandleDragChanged: ((_ startY: CGFloat, _ locationY: CGFloat) -> Void)? = nil
     var onHandleDragEnded: ((_ startY: CGFloat, _ locationY: CGFloat) -> Void)? = nil
 
@@ -36,16 +40,13 @@ struct BlockRowView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            if !block.isListBlock {
-                gutter
-            }
+            gutter
             blockContent
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .contextMenu {
-                    if isEditable {
-                        blockContextMenu
-                    }
-                }
+                .gesture(
+                    rowReorderGesture,
+                    including: rowReorderGestureMask
+                )
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
@@ -85,11 +86,15 @@ struct BlockRowView: View {
                 dragOffset = 0
             }
         }
+        .onDisappear {
+            dragOffset = 0
+        }
         .sheet(isPresented: $showSlashCommand) {
             SlashCommandMenu(
                 isPresented: $showSlashCommand,
                 blockID: block.id,
                 document: document,
+                isImageActionEnabled: isImageActionEnabled,
                 onImageData: { data, targetID in
                     guard let targetID else { return }
                     onImageData?(data, targetID)
@@ -107,6 +112,7 @@ struct BlockRowView: View {
             PhotoPickerButton(
                 label: "选择图片",
                 systemImage: "photo",
+                isEnabled: isImageActionEnabled,
                 onImageData: { data in
                     guard let targetID = imagePickerFigureID else { return }
                     onImageData?(data, targetID)
@@ -141,6 +147,40 @@ struct BlockRowView: View {
             .allowsHitTesting(false)
     }
 
+    private var rowReorderGestureMask: GestureMask {
+        guard isEditable, !isMultiSelectionActive else { return .none }
+        // UIKit text views and PhotosPicker keep ownership of their long-press paths.
+        if case let .figure(_, imageURL, _) = block, imageURL == nil {
+            return .gesture
+        }
+        return block.isTextBlock ? .gesture : .all
+    }
+
+    private var rowReorderGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.35)
+            .sequenced(before: DragGesture(minimumDistance: 8, coordinateSpace: .global))
+            .onChanged { value in
+                switch value {
+                case .first(true):
+                    onRowDragBegan?()
+                case .first(false):
+                    onRowDragEnded?(nil, nil, false)
+                case let .second(_, drag):
+                    onRowDragChanged?(drag.startLocation.y, drag.location.y)
+                }
+            }
+            .onEnded { value in
+                switch value {
+                case .first(true):
+                    onRowDragEnded?(nil, nil, true)
+                case .first(false):
+                    onRowDragEnded?(nil, nil, false)
+                case let .second(_, drag):
+                    onRowDragEnded?(drag.startLocation.y, drag.location.y, true)
+                }
+            }
+    }
+
     private var gutter: some View {
         HStack(spacing: 0) {
             addBlockMenu
@@ -163,6 +203,7 @@ struct BlockRowView: View {
                         } label: {
                             Label(type.displayName, systemImage: type.icon)
                         }
+                        .disabled(type == .figure && !isImageActionEnabled)
                     }
                 }
             }
@@ -191,6 +232,11 @@ struct BlockRowView: View {
                     }
             )
             .accessibilityLabel("拖动排序")
+            .contextMenu {
+                if isEditable {
+                    blockContextMenu
+                }
+            }
     }
 
     private func gutterIcon(systemName: String, label: String) -> some View {
@@ -459,10 +505,11 @@ struct BlockRowView: View {
                                 .frame(maxWidth: .infinity, minHeight: 150)
                         }
                     }
-                } else if isEditable, onImageData != nil {
+                } else if isEditable, isImageActionEnabled, onImageData != nil {
                     PhotoPickerButton(
                         label: "等待图片",
                         systemImage: "photo",
+                        isEnabled: isImageActionEnabled,
                         onImageData: { data in
                             onImageData?(data, id)
                         },
@@ -769,6 +816,7 @@ struct BlockRowView: View {
     }
 
     private func insertBlock(of type: BlockType) {
+        guard type != .figure || isImageActionEnabled else { return }
         let newBlock = type.makeEmpty
         document.insertBlock(newBlock, after: block.id)
         focusBlock(id: newBlock.id, cursorAtEnd: false)

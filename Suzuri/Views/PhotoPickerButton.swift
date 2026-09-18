@@ -11,6 +11,7 @@ enum PhotoPickerError: Error, Equatable, Sendable {
 struct PhotoPickerButton: View {
     let label: String
     let systemImage: String
+    let isEnabled: Bool
     let onImageData: (Data) -> Void
     let onError: ((Error) -> Void)?
     let onLoadingChanged: ((Bool) -> Void)?
@@ -22,6 +23,7 @@ struct PhotoPickerButton: View {
     init(
         label: String = "添加图片",
         systemImage: String = "photo",
+        isEnabled: Bool = true,
         onImageData: @escaping (Data) -> Void,
         onError: ((Error) -> Void)? = nil,
         onLoadingChanged: ((Bool) -> Void)? = nil,
@@ -29,6 +31,7 @@ struct PhotoPickerButton: View {
     ) {
         self.label = label
         self.systemImage = systemImage
+        self.isEnabled = isEnabled
         self.onImageData = onImageData
         self.onError = onError
         self.onLoadingChanged = onLoadingChanged
@@ -43,10 +46,10 @@ struct PhotoPickerButton: View {
                 Label(label, systemImage: systemImage)
             }
         }
-        .disabled(isLoading)
+        .disabled(isLoading || !isEnabled)
         .simultaneousGesture(
             TapGesture().onEnded {
-                guard !isLoading else { return }
+                guard isEnabled, !isLoading else { return }
                 onPickerPresented?()
             }
         )

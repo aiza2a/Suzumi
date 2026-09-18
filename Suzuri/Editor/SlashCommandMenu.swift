@@ -6,6 +6,7 @@ struct SlashCommandMenu: View {
     @Binding var isPresented: Bool
     let blockID: BlockID
     let document: BlockEditorDocument
+    var isImageActionEnabled = true
     var onImageData: ((Data, BlockID) -> Void)? = nil
     var onImageError: ((Error, BlockID) -> Void)? = nil
     var onImagePickerLoadingChanged: ((Bool) -> Void)? = nil
@@ -51,7 +52,10 @@ struct SlashCommandMenu: View {
         .presentationDetents([.height(320)])
         .presentationDragIndicator(.visible)
         .onDisappear {
-            if !didChooseCommand {
+            guard !didChooseCommand else { return }
+            if selectedFigureID != nil {
+                finalizeFigureChoice(dismissMenu: false)
+            } else {
                 restoreSlash()
             }
         }
@@ -62,18 +66,22 @@ struct SlashCommandMenu: View {
         PhotoPickerButton(
             label: type.displayName,
             systemImage: type.icon,
+            isEnabled: isImageActionEnabled,
             onImageData: { data in
-                let figureID = prepareFigure()
+                guard let figureID = figureIDForCallback() else { return }
                 onImageData?(data, figureID)
-                finishChoice()
+                finalizeFigureChoice(dismissMenu: true)
             },
             onError: { error in
-                let figureID = prepareFigure()
+                guard let figureID = figureIDForCallback() else { return }
                 onImageError?(error, figureID)
-                finishChoice()
+                finalizeFigureChoice(dismissMenu: true)
             },
-            onLoadingChanged: onImagePickerLoadingChanged,
+            onLoadingChanged: { isLoading in
+                onImagePickerLoadingChanged?(isLoading)
+            },
             onPickerPresented: {
+                guard isImageActionEnabled else { return }
                 _ = prepareFigure()
             }
         )
@@ -81,6 +89,7 @@ struct SlashCommandMenu: View {
     }
 
     private func choose(_ type: BlockType) {
+        discardPreparedFigure()
         let replacement = type.makeEmpty
         document.replaceBlock(id: blockID, with: replacement)
         document.focusedBlockID = replacement.id
@@ -95,17 +104,43 @@ struct SlashCommandMenu: View {
             return selectedFigureID
         }
 
-        let replacement = BlockType.figure.makeEmpty
+        let figure = BlockType.figure.makeEmpty
         if document.index(of: blockID) != nil {
-            document.insertBlock(replacement, after: blockID)
-            document.removeBlock(id: blockID)
+            // Keep the slash presenter alive until the picker has completed.
+            document.insertBlock(figure, after: blockID)
         } else {
-            document.blocks.append(replacement)
+            document.blocks.append(figure)
         }
-        document.focusedBlockID = replacement.id
+        document.focusedBlockID = figure.id
         document.pendingCursorOffset = nil
-        selectedFigureID = replacement.id
-        return replacement.id
+        selectedFigureID = figure.id
+        return figure.id
+    }
+
+    private func figureIDForCallback() -> BlockID? {
+        if let selectedFigureID {
+            return selectedFigureID
+        }
+        guard isImageActionEnabled else { return nil }
+        return prepareFigure()
+    }
+
+    private func discardPreparedFigure() {
+        guard let selectedFigureID else { return }
+        document.removeBlock(id: selectedFigureID)
+        self.selectedFigureID = nil
+    }
+
+    private func finalizeFigureChoice(dismissMenu: Bool) {
+        guard selectedFigureID != nil else { return }
+        if document.block(for: blockID) != nil {
+            document.removeBlock(id: blockID)
+        }
+        didChooseCommand = true
+        if dismissMenu {
+            isPresented = false
+            dismiss()
+        }
     }
 
     private func finishChoice() {
@@ -115,9 +150,12 @@ struct SlashCommandMenu: View {
     }
 
     private func cancel() {
-        restoreSlash()
-        isPresented = false
-        dismiss()
+        if selectedFigureID != nil {
+            finalizeFigureChoice(dismissMenu: true)
+        } else {
+            restoreSlash()
+            finishChoice()
+        }
     }
 
     private func restoreSlash() {

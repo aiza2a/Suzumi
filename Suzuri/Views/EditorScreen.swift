@@ -110,6 +110,7 @@ struct EditorScreen: View {
                     // D3 block editor owns all structured text, lists, figures, and focus state.
                     BlockEditorView(
                         isEditable: canEdit && !isHydrating && !isPublishing,
+                        isImageActionEnabled: isImageActionEnabled,
                         uploadingFigureID: uploadingFigureID,
                         onImageData: { data, targetID in
                             Task { @MainActor in
@@ -339,6 +340,14 @@ struct EditorScreen: View {
             origin: draftOrigin,
             accountFingerprint: draftAccountFingerprint
         ) != nil
+    }
+
+    private var isImageActionEnabled: Bool {
+        canEdit
+            && !isHydrating
+            && !isPublishing
+            && !isUploadingImage
+            && !isPickingImage
     }
 
     private var canPublish: Bool {
@@ -587,7 +596,13 @@ struct EditorScreen: View {
 
     /// 统一执行压缩、缓存和上传；可填充指定图片块或插入当前焦点之后。
     private func uploadImage(_ sourceData: Data, intoFigure targetID: UUID? = nil) async {
-        guard !isCancelled, canEdit, !isHydrating, !isPublishing, !isUploadingImage else { return }
+        guard !isCancelled, canEdit, !isHydrating, !isPublishing else { return }
+        guard !isUploadingImage else {
+            retryImageData = sourceData
+            retryFigureID = targetID
+            imageUploadErrorMessage = "已有图片正在上传，请稍后重试"
+            return
+        }
         requestGeneration += 1
         let generation = requestGeneration
         isUploadingImage = true
