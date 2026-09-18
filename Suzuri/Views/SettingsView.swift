@@ -3,8 +3,11 @@ import SwiftUI
 /// 设置页：账号、图床、服务器和关于四组配置。
 @MainActor
 struct SettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+
     @State private var sessionController: SessionController
     @State private var serverManager: ServerManager
+    var showsDoneButton: Bool = false
 
     @AppStorage(ImageHostConfiguration.providerKey)
     private var imageProviderRaw = ImageProvider.quax.rawValue
@@ -24,10 +27,11 @@ struct SettingsView: View {
 
     private let tokenStore: TokenStore
 
-    init(sessionController: SessionController) {
+    init(sessionController: SessionController, showsDoneButton: Bool = false) {
         self.tokenStore = TokenStore()
         self._sessionController = State(initialValue: sessionController)
         self._serverManager = State(initialValue: sessionController.serverManager)
+        self.showsDoneButton = showsDoneButton
         self._authorName = State(initialValue: sessionController.authorName ?? "")
         self._authorURL = State(initialValue: sessionController.authorURL ?? "")
         self._imagePassword = State(
@@ -53,6 +57,15 @@ struct SettingsView: View {
         }
         .navigationTitle("设置")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if showsDoneButton {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") {
+                        dismiss()
+                    }
+                }
+            }
+        }
         .task {
             await sessionController.load()
             if authorName.isEmpty {
