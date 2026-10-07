@@ -114,7 +114,7 @@ struct EditorScreen: View {
             header: AnyView(documentHeader)
         )
         .environment(document)
-        .background(SuzuriTheme.paper, ignoresSafeAreaEdges: .all)
+        .background { SuzuriTheme.paper.ignoresSafeArea() }
     }
 
     private var navigationContent: some View {
