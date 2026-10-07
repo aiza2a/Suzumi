@@ -19,7 +19,6 @@ targets:
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         INFOPLIST_KEY_NSCameraUsageDescription: "拍摄照片并在你确认后上传到所选图床。"
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "选择要插入文章的图片。"
-        CODE_SIGNING_ALLOWED: NO
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: 0.2.0
         SWIFT_VERSION: "5"
