@@ -1,10 +1,6 @@
 import SwiftUI
 
-/// Suzuri 品牌色板（v3 设计文档固化，勿改数值）。
-///
-/// H≈359.5° 同色相 11 档红系。主色 `brand600` 仅用于交互焦点；
-/// 大面积底色用亮端 `brand50/100` / 暗端 `brand900/950`；
-/// 玻璃描边一律用 `white(0.18~0.22)`，不用灰线。
+/// Crimson accents; semantic reading surfaces live in SuzuriTheme.
 extension Color {
     static let brand50  = Color(red: 0.984, green: 0.941, blue: 0.941) // #FBF0F0
     static let brand100 = Color(red: 0.965, green: 0.875, blue: 0.875) // #F6DFDF

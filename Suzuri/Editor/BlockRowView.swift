@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// Renders one document block, its focus chrome, and the block gutter controls.
+/// A typography-first document row with native text selection and optional block selection.
 @MainActor
 struct BlockRowView: View {
     let block: Block
@@ -20,27 +20,23 @@ struct BlockRowView: View {
     var onImageData: ((Data, BlockID?) -> Void)? = nil
     var onImageError: ((Error, BlockID?) -> Void)? = nil
     var onImagePickerLoadingChanged: ((Bool) -> Void)? = nil
+    var onRequestImage: ((BlockID?) -> Void)? = nil
     var onRowDragBegan: (() -> Void)? = nil
     var onRowDragChanged: ((_ startY: CGFloat, _ locationY: CGFloat) -> Void)? = nil
     var onRowDragEnded: ((_ startY: CGFloat?, _ locationY: CGFloat?, _ entersMultiSelection: Bool) -> Void)? = nil
-    var onHandleDragChanged: ((_ startY: CGFloat, _ locationY: CGFloat) -> Void)? = nil
-    var onHandleDragEnded: ((_ startY: CGFloat, _ locationY: CGFloat) -> Void)? = nil
 
     @State private var showSlashCommand = false
-    @State private var showImagePicker = false
-    @State private var imagePickerFigureID: BlockID?
     @State private var localFocusedListItemID: UUID?
-    @State private var dragOffset: CGFloat = 0
+    @State private var isLinkEditorVisible = false
+    @State private var editedLinkAddress = ""
+    @State private var pendingExternalImageID: BlockID?
 
     private var isFocused: Bool {
         document.focusedBlockID == block.id
     }
 
-    private static let gutterWidth: CGFloat = 28
-
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            gutter
             blockContent
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .gesture(
@@ -48,22 +44,24 @@ struct BlockRowView: View {
                     including: rowReorderGestureMask
                 )
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 7)
         .contentShape(Rectangle())
         .background(selectionBackground)
-        .overlay(focusOverlay)
         .shadow(
             color: isBeingDragged && !reduceMotion
                 ? Color.black.opacity(0.18)
-                : Color.brand600.opacity(isFocused ? 0.12 : 0),
-            radius: isBeingDragged && !reduceMotion ? 14 : (isFocused ? 10 : 0),
-            y: isBeingDragged && !reduceMotion ? 6 : (isFocused ? 4 : 0)
+                : .clear,
+            radius: isBeingDragged && !reduceMotion ? 14 : 0,
+            y: isBeingDragged && !reduceMotion ? 6 : 0
         )
         .scaleEffect(isBeingDragged && !reduceMotion ? 1.02 : 1)
         .zIndex(isBeingDragged ? 1 : 0)
         .animation(reduceMotion ? nil : AppAnimation.blockFocus, value: isFocused)
         .animation(reduceMotion ? nil : AppAnimation.blockFocus, value: isBlockSelected)
         .animation(reduceMotion ? nil : AppAnimation.pop, value: isBeingDragged)
+        .contextMenu {
+            if isEditable, !block.isTextBlock { blockContextMenu }
+        }
         .onTapGesture {
             guard isEditable, !isBeingDragged else { return }
             if !isMultiSelectionActive, !block.isListBlock {
@@ -71,25 +69,25 @@ struct BlockRowView: View {
             }
             onTap?()
         }
-        .onChange(of: isBeingDragged) { _, dragging in
-            if !dragging {
-                dragOffset = 0
+        .alert("编辑链接地址", isPresented: $isLinkEditorVisible) {
+            TextField("https://…", text: $editedLinkAddress)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("取消", role: .cancel) {}
+            Button("保存") {
+                guard let url = editedLinkURL,
+                      let current = document.block(for: block.id),
+                      case let .link(id, text, _) = current else { return }
+                document.replaceBlock(id: id, with: .link(id: id, text: text, url: url))
             }
-        }
-        .onChange(of: isEditable) { _, editable in
-            if !editable {
-                dragOffset = 0
-            }
-        }
-        .onChange(of: isMultiSelectionActive) { _, active in
-            if active {
-                dragOffset = 0
-            }
-        }
-        .onDisappear {
-            dragOffset = 0
-        }
-        .sheet(isPresented: $showSlashCommand) {
+            .disabled(editedLinkURL == nil)
+        } message: { Text("请输入完整的 http 或 https 地址。") }
+        .sheet(isPresented: $showSlashCommand, onDismiss: {
+            guard let id = pendingExternalImageID else { return }
+            pendingExternalImageID = nil
+            onRequestImage?(id)
+        }) {
             SlashCommandMenu(
                 isPresented: $showSlashCommand,
                 blockID: block.id,
@@ -101,33 +99,15 @@ struct BlockRowView: View {
                 onImageError: { error, targetID in
                     onImageError?(error, targetID)
                 },
-                onImagePickerLoadingChanged: onImagePickerLoadingChanged
+                onImagePickerLoadingChanged: onImagePickerLoadingChanged,
+                onRequestImage: deferredImageRequest
             )
         }
-        .sheet(isPresented: $showImagePicker, onDismiss: {
-            imagePickerFigureID = nil
-        }) {
-            PhotoPickerButton(
-                label: "选择图片",
-                systemImage: "photo",
-                isEnabled: isImageActionEnabled,
-                onImageData: { data in
-                    guard let targetID = imagePickerFigureID else { return }
-                    onImageData?(data, targetID)
-                    showImagePicker = false
-                },
-                onError: { error in
-                    guard let targetID = imagePickerFigureID else { return }
-                    onImageError?(error, targetID)
-                    showImagePicker = false
-                },
-                onLoadingChanged: onImagePickerLoadingChanged
-            )
-            .frame(maxWidth: .infinity, minHeight: 140)
-            .padding(24)
-            .presentationDetents([.height(220)])
-            .presentationDragIndicator(.visible)
-        }
+    }
+
+    private var deferredImageRequest: ((BlockID?) -> Void)? {
+        guard onRequestImage != nil else { return nil }
+        return { pendingExternalImageID = $0 }
     }
 
     private var selectionBackground: some View {
@@ -136,22 +116,14 @@ struct BlockRowView: View {
             .allowsHitTesting(false)
     }
 
-    private var focusOverlay: some View {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .stroke(
-                Color.brand600.opacity(isFocused ? 0.55 : (isBlockSelected ? 0.4 : 0)),
-                lineWidth: isFocused ? 1.2 : (isBlockSelected ? 1.0 : 1.0)
-            )
-            .allowsHitTesting(false)
-    }
-
     private var rowReorderGestureMask: GestureMask {
         guard isEditable, !isMultiSelectionActive else { return .none }
+        guard !block.isTextBlock else { return .none }
         // UIKit text views and PhotosPicker keep ownership of their long-press paths.
         if case let .figure(_, imageURL, _) = block, imageURL == nil {
             return .gesture
         }
-        return block.isTextBlock ? .gesture : .all
+        return .all
     }
 
     private var rowReorderGesture: some Gesture {
@@ -181,73 +153,6 @@ struct BlockRowView: View {
                     onRowDragEnded?(nil, nil, false)
                 }
             }
-    }
-
-    private var gutter: some View {
-        HStack(spacing: 0) {
-            addBlockMenu
-            dragHandle
-        }
-        .frame(width: Self.gutterWidth, alignment: .leading)
-        .opacity(isFocused || isBeingDragged ? 1 : 0)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isFocused || isBeingDragged)
-        .allowsHitTesting((isFocused || isBeingDragged) && isEditable)
-        .accessibilityHidden((!isFocused && !isBeingDragged) || !isEditable)
-    }
-
-    private var addBlockMenu: some View {
-        Menu {
-            ForEach(BlockType.groupedByCategory, id: \.category) { group in
-                Section(group.category.displayName) {
-                    ForEach(group.types, id: \.self) { type in
-                        Button {
-                            insertBlock(of: type)
-                        } label: {
-                            Label(type.displayName, systemImage: type.icon)
-                        }
-                        .disabled(type == .figure && !isImageActionEnabled)
-                    }
-                }
-            }
-        } label: {
-            gutterIcon(systemName: "plus", label: "添加块")
-        }
-        .accessibilityLabel("添加块")
-    }
-
-    private var dragHandle: some View {
-        Image(systemName: "line.3.horizontal")
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(.secondary)
-            .frame(width: 14, height: 22)
-            .contentShape(Rectangle())
-            .offset(y: dragOffset)
-            .gesture(
-                DragGesture(minimumDistance: 8, coordinateSpace: .global)
-                    .onChanged { value in
-                        dragOffset = value.translation.height
-                        onHandleDragChanged?(value.startLocation.y, value.location.y)
-                    }
-                    .onEnded { value in
-                        dragOffset = 0
-                        onHandleDragEnded?(value.startLocation.y, value.location.y)
-                    }
-            )
-            .accessibilityLabel("拖动排序")
-            .contextMenu {
-                if isEditable {
-                    blockContextMenu
-                }
-            }
-    }
-
-    private func gutterIcon(systemName: String, label: String) -> some View {
-        Image(systemName: systemName)
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(.secondary)
-            .frame(width: 14, height: 22)
-            .contentShape(Rectangle())
-            .accessibilityLabel(label)
     }
 
     @ViewBuilder
@@ -387,11 +292,27 @@ struct BlockRowView: View {
                 onArrowDown: { _ in moveToNextBlock(from: id) },
                 onDeleteForwardAtEnd: { mergeNextBlock(id: id) }
             )
-            Text(url.absoluteString)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            HStack {
+                Text(url.absoluteString)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if isEditable {
+                    Button {
+                        editedLinkAddress = url.absoluteString
+                        isLinkEditorVisible = true
+                    } label: { Image(systemName: "pencil") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.brand600)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityLabel("编辑链接地址")
+                }
+            }
         }
+    }
+
+    private var editedLinkURL: URL? {
+        EditorLinkAddress.parse(editedLinkAddress)
     }
 
     private func listBlock(id: BlockID, items: [ListItem], numbered: Bool) -> some View {
@@ -507,6 +428,13 @@ struct BlockRowView: View {
                                 .frame(maxWidth: .infinity, minHeight: 150)
                         }
                     }
+                } else if isEditable, isImageActionEnabled, let onRequestImage {
+                    Button { onRequestImage(id) } label: {
+                        Label("选择图片", systemImage: "photo.badge.plus")
+                            .frame(maxWidth: .infinity, minHeight: 150)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.brand600)
                 } else if isEditable, isImageActionEnabled, onImageData != nil {
                     PhotoPickerButton(
                         label: "等待图片",
@@ -568,7 +496,7 @@ struct BlockRowView: View {
             text: textBinding(for: id),
             font: font,
             textColor: textColor,
-            lineSpacing: 3,
+            lineSpacing: 6,
             isFocused: isFocused,
             isEditable: isEditable,
             placeholder: placeholder,
@@ -603,7 +531,7 @@ struct BlockRowView: View {
         BlockTextView(
             text: text,
             font: font,
-            lineSpacing: 3,
+            lineSpacing: 6,
             isFocused: isFocused,
             isEditable: isEditable,
             placeholder: placeholder,
@@ -795,7 +723,7 @@ struct BlockRowView: View {
     private var blockContextMenu: some View {
         Group {
             Menu("转换为") {
-                ForEach(BlockType.turnIntoTypes, id: \.self) { type in
+                ForEach(BlockType.turnIntoTypes.filter { $0 != .link }, id: \.self) { type in
                     Button {
                         turnInto(type)
                     } label: {
@@ -814,17 +742,6 @@ struct BlockRowView: View {
             } label: {
                 Label("删除", systemImage: "trash")
             }
-        }
-    }
-
-    private func insertBlock(of type: BlockType) {
-        guard type != .figure || isImageActionEnabled else { return }
-        let newBlock = type.makeEmpty
-        document.insertBlock(newBlock, after: block.id)
-        focusBlock(id: newBlock.id, cursorAtEnd: false)
-        if type == .figure {
-            imagePickerFigureID = newBlock.id
-            showImagePicker = true
         }
     }
 
@@ -1013,6 +930,8 @@ struct BlockRowView: View {
 
     private func headingFont(for level: Int) -> UIFont {
         let size: CGFloat = level <= 1 ? 28 : 23
-        return .systemFont(ofSize: size, weight: .bold)
+        return UIFontMetrics(forTextStyle: .title2).scaledFont(
+            for: .systemFont(ofSize: size, weight: .semibold)
+        )
     }
 }

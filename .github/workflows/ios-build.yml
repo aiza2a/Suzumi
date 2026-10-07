@@ -3,14 +3,21 @@ name: Build IPA
 on:
   push:
     tags: ['v*']
-    branches: [main]
+    branches: [main, codex/suzuri-usability-redesign]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: macos-15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90
         with:
@@ -29,7 +36,7 @@ jobs:
         env:
           BUILD_NUMBER: ${{ github.run_number }}
         run: |
-          echo "Building marketing version 0.1.1, CI build ${BUILD_NUMBER}"
+          echo "Building marketing version 0.2.0, CI build ${BUILD_NUMBER}"
           xcodebuild archive \
             -project Suzuri.xcodeproj \
             -scheme Suzuri \
@@ -55,3 +62,26 @@ jobs:
           name: Suzuri-IPA
           path: build/Suzuri-unsigned.ipa
           if-no-files-found: error
+
+      - name: Publish downloadable preview
+        if: github.ref == 'refs/heads/codex/suzuri-usability-redesign'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PREVIEW_TAG: suzuri-preview-${{ github.run_number }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          cat > build/preview-notes.md <<'NOTES'
+          Suzuri 界面重构预览版。
+
+          - 附件为未签名的 iOS IPA。安装前需要使用支持的侧载工具和自己的签名账号重新签名，不能直接从浏览器安装。
+          - 编译与 XCTest 独立运行；此预览发布只表示 IPA 构建成功，不代表测试已完成或通过。
+          - 请在 Actions 的 iOS Tests 工作流核对相同提交的测试结果。
+          - 本预览来自开发分支，未合并 main，也不是 App Store / TestFlight 正式版本。
+          NOTES
+          printf '\nSource commit: `%s`\n' "$GITHUB_SHA" >> build/preview-notes.md
+          gh release create "$PREVIEW_TAG" build/Suzuri-unsigned.ipa \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Suzuri preview $PREVIEW_TAG" \
+            --notes-file build/preview-notes.md

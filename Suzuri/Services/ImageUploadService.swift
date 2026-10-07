@@ -4,7 +4,7 @@ import Foundation
 struct ImageUploadService: Sendable {
     var hosts: [any ImageHosting]
 
-    init(hosts: [any ImageHosting] = [QuAxHost(), TelegraphCompatHost()]) {
+    init(hosts: [any ImageHosting]) {
         self.hosts = hosts
     }
 

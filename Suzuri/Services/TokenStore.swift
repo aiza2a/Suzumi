@@ -73,18 +73,20 @@ final class TokenStore {
 
     /// 保存 Data。若已存在则覆盖。
     func save(_ data: Data, for account: String) throws {
-        // 先删除旧值，避免重复项。
-        delete(account)
-
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: account
+        ]
+        // Update atomically: a failed write must not destroy the previous credential.
+        let attributes: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
-
-        let status = SecItemAdd(query as CFDictionary, nil)
+        var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            status = SecItemAdd(query.merging(attributes) { _, new in new } as CFDictionary, nil)
+        }
         guard status == errSecSuccess else {
             throw KeychainError.unhandledStatus(status)
         }

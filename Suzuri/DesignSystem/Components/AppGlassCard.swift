@@ -23,7 +23,12 @@ struct AppGlassCard<Content: View>: View {
         content()
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .appGlass(cornerRadius: cornerRadius, material: material, brandTint: brandTint)
+            .background(brandTint ? SuzuriTheme.accent.opacity(0.07) : SuzuriTheme.paper,
+                        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(SuzuriTheme.line, lineWidth: 0.5)
+            }
     }
 }
 

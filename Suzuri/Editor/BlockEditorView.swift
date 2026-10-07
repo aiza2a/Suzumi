@@ -28,12 +28,16 @@ struct BlockEditorView: View {
     var onImageData: ((Data, BlockID?) -> Void)? = nil
     var onImageError: ((Error, BlockID?) -> Void)? = nil
     var onImagePickerLoadingChanged: ((Bool) -> Void)? = nil
+    var onRequestImage: ((BlockID?) -> Void)? = nil
+    var header: AnyView? = nil
 
     @State private var multiSelection = MultiBlockSelection()
     @State private var focusedListItemID: UUID?
-    @State private var isTextSelectionToolbarVisible = false
     @State private var blockFrames: [BlockID: CGRect] = [:]
     @State private var dragSession: BlockDragSession?
+    @State private var isLinkPromptVisible = false
+    @State private var linkAddress = ""
+    @State private var linkTitle = ""
 
     private var blockOrder: [BlockID] {
         document.blocks.map(\.id)
@@ -43,7 +47,10 @@ struct BlockEditorView: View {
         ZStack(alignment: .top) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(spacing: 4) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let header {
+                            header.padding(.bottom, 24)
+                        }
                         ForEach(document.blocks) { block in
                             BlockRowView(
                                 block: block,
@@ -58,13 +65,12 @@ struct BlockEditorView: View {
                                     if range.length > 0 {
                                         dragSession = nil
                                     }
-                                    isTextSelectionToolbarVisible = range.length > 0
-                                        && !multiSelection.isActive
                                 },
                                 focusedListItemID: $focusedListItemID,
                                 onImageData: onImageData,
                                 onImageError: onImageError,
                                 onImagePickerLoadingChanged: onImagePickerLoadingChanged,
+                                onRequestImage: onRequestImage,
                                 onRowDragBegan: {
                                     beginDragSession(for: block.id)
                                 },
@@ -81,20 +87,6 @@ struct BlockEditorView: View {
                                         startY: startY,
                                         locationY: locationY,
                                         entersMultiSelection: entersMultiSelection
-                                    )
-                                },
-                                onHandleDragChanged: { startY, locationY in
-                                    handleHandleDragChanged(
-                                        blockID: block.id,
-                                        startY: startY,
-                                        locationY: locationY
-                                    )
-                                },
-                                onHandleDragEnded: { startY, locationY in
-                                    handleHandleDragEnded(
-                                        blockID: block.id,
-                                        startY: startY,
-                                        locationY: locationY
                                     )
                                 }
                             )
@@ -116,9 +108,19 @@ struct BlockEditorView: View {
                                 )
                             ))
                         }
+                        if isEditable {
+                            Color.clear
+                                .frame(height: 120)
+                                .contentShape(Rectangle())
+                                .onTapGesture { focusDocumentEnd() }
+                                .accessibilityLabel("继续写作")
+                                .accessibilityAddTraits(.isButton)
+                        }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, multiSelection.isActive ? 58 : 16)
+                    .frame(maxWidth: 720, alignment: .leading)
+                    .padding(.horizontal, 26)
+                    .padding(.top, multiSelection.isActive ? 58 : 28)
+                    .frame(maxWidth: .infinity)
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .onPreferenceChange(BlockRowFramePreferenceKey.self) { frames in
@@ -138,15 +140,25 @@ struct BlockEditorView: View {
                     .padding(.top, 8)
                     .transition(reduceMotion ? .identity : .move(edge: .top).combined(with: .opacity))
                     .zIndex(2)
-            } else if isTextSelectionToolbarVisible {
-                SelectionToolbar(
-                    isVisible: true,
-                    onDismiss: { isTextSelectionToolbarVisible = false }
-                )
-                .padding(.top, 8)
-                .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.94, anchor: .bottom)))
-                .zIndex(1)
             }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if isEditable { writingToolbar }
+        }
+        .alert("插入链接", isPresented: $isLinkPromptVisible) {
+            TextField("显示文字", text: $linkTitle)
+            TextField("https://…", text: $linkAddress)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+                .autocorrectionDisabled()
+            Button("取消", role: .cancel) {}
+            Button("插入") {
+                guard let url = validLinkURL else { return }
+                insert(.link(id: UUID(), text: linkTitle.isEmpty ? url.absoluteString : linkTitle, url: url))
+            }
+            .disabled(validLinkURL == nil)
+        } message: {
+            Text("请输入完整的 http 或 https 地址。")
         }
         .animation(reduceMotion ? nil : AppAnimation.listInsert, value: document.blocks.count)
         .animation(reduceMotion ? nil : AppAnimation.listInsert, value: blockOrder)
@@ -154,7 +166,6 @@ struct BlockEditorView: View {
         .onChange(of: multiSelection.isActive) { _, isActive in
             if isActive {
                 dragSession = nil
-                isTextSelectionToolbarVisible = false
             }
         }
         .onChange(of: isEditable) { _, editable in
@@ -170,8 +181,146 @@ struct BlockEditorView: View {
         }
     }
 
+    private var validLinkURL: URL? {
+        EditorLinkAddress.parse(linkAddress)
+    }
+
+    private var writingToolbar: some View {
+        HStack(spacing: 4) {
+            Menu {
+                ForEach(BlockType.allCases.filter { $0 != .figure && $0 != .link }) { type in
+                    Button { insert(type.makeEmpty) } label: {
+                        Label(type.displayName, systemImage: type.icon)
+                    }
+                }
+                Button {
+                    linkAddress = ""
+                    linkTitle = ""
+                    isLinkPromptVisible = true
+                } label: { Label("链接", systemImage: "link") }
+            } label: { toolIcon("plus", label: "插入内容") }
+
+            Menu {
+                ForEach(BlockType.turnIntoTypes.filter { $0 != .link }) { type in
+                    Button { convertFocusedBlock(to: type) } label: {
+                        Label(type.displayName, systemImage: type.icon)
+                    }
+                }
+            } label: { toolIcon("textformat", label: "段落样式") }
+            .disabled(focusedText == nil)
+
+            if let onRequestImage {
+                Button { onRequestImage(nil) } label: {
+                    toolIcon("photo", label: "插入图片")
+                }
+                .disabled(!isImageActionEnabled)
+            } else if onImageData != nil {
+                PhotoPickerButton(
+                    label: "插入图片", systemImage: "photo",
+                    isEnabled: isImageActionEnabled,
+                    onImageData: { data in onImageData?(data, nil) },
+                    onError: { error in onImageError?(error, nil) },
+                    onLoadingChanged: onImagePickerLoadingChanged
+                )
+                .labelStyle(.iconOnly)
+                .frame(width: 44, height: 44)
+            }
+            Spacer(minLength: 4)
+            Menu {
+                Button { moveFocusedBlock(.up) } label: { Label("段落上移", systemImage: "arrow.up") }
+                Button { moveFocusedBlock(.down) } label: { Label("段落下移", systemImage: "arrow.down") }
+                Button {
+                    if let id = document.focusedBlockID { enterMultiSelection(with: id) }
+                } label: { Label("选择多个段落", systemImage: "checkmark.circle") }
+                Button(role: .destructive) {
+                    guard let id = document.focusedBlockID else { return }
+                    let next = document.removeBlock(id: id)
+                    document.focusedBlockID = next.map { document.blocks[$0].id }
+                    document.pendingCursorOffset = 0
+                } label: { Label("删除段落", systemImage: "trash") }
+            } label: { toolIcon("ellipsis", label: "段落操作") }
+            .disabled(document.focusedBlockID == nil)
+            Button {
+                document.focusedBlockID = nil
+                document.pendingCursorOffset = nil
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            } label: { toolIcon("keyboard.chevron.compact.down", label: "收起键盘") }
+        }
+        .font(.system(size: 18, weight: .medium))
+        .foregroundStyle(Color.brand600)
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .frame(maxWidth: 720)
+        .frame(maxWidth: .infinity)
+        .background(.regularMaterial)
+        .overlay(alignment: .top) { Divider() }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("写作工具栏")
+    }
+
+    private func toolIcon(_ name: String, label: String) -> some View {
+        Image(systemName: name)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+            .accessibilityLabel(label)
+    }
+
+    private var focusedText: String? {
+        guard let id = document.focusedBlockID, let block = document.block(for: id) else { return nil }
+        switch block {
+        case let .bulletList(_, items), let .numberedList(_, items):
+            return items.map(\.text).joined(separator: "\n")
+        case .figure, .divider, .link:
+            return nil
+        default:
+            return block.textContent
+        }
+    }
+
+    private func convertFocusedBlock(to type: BlockType) {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        guard let id = document.focusedBlockID, let text = focusedText,
+              let block = document.block(for: id) else { return }
+        let replacement: Block
+        switch (block, type) {
+        case let (.bulletList(_, items), .numberedList): replacement = .numberedList(id: id, items: items)
+        case let (.numberedList(_, items), .bulletList): replacement = .bulletList(id: id, items: items)
+        case (.bulletList, .bulletList), (.numberedList, .numberedList): return
+        default: replacement = type.makeBlock(id: id, text: text)
+        }
+        document.replaceBlock(id: id, with: replacement)
+        focusedListItemID = nil
+        document.pendingCursorOffset = 0
+    }
+
+    private func insert(_ block: Block) {
+        if let id = document.focusedBlockID {
+            document.insertBlock(block, after: id)
+        } else {
+            document.insertBlock(block, at: document.blocks.count)
+        }
+        document.focusedBlockID = block.id
+        document.pendingCursorOffset = 0
+        focusedListItemID = nil
+    }
+
+    private func focusDocumentEnd() {
+        if let last = document.blocks.last, case .paragraph = last {
+            document.focusedBlockID = last.id
+            document.pendingCursorOffset = last.textContent?.utf16.count ?? 0
+        } else {
+            insert(.emptyParagraph())
+        }
+    }
+
+    private func moveFocusedBlock(_ direction: BlockEditorDocument.MoveDirection) {
+        guard let id = document.focusedBlockID else { return }
+        document.moveSelectedBlocks([id], direction: direction)
+    }
+
     private var multiSelectionBar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 6) {
             selectionButton("复制", systemImage: "doc.on.doc") {
                 copySelectedBlocks()
             }
@@ -224,7 +373,7 @@ struct BlockEditorView: View {
         Button(role: role, action: action) {
             Image(systemName: systemImage)
                 .font(.caption.weight(.semibold))
-                .frame(width: 24, height: 24)
+                .frame(width: 44, height: 44)
         }
         .buttonStyle(.plain)
         .foregroundStyle(role == .destructive ? Color.red : Color.brand600)
@@ -245,15 +394,11 @@ struct BlockEditorView: View {
     private func handleTap(on blockID: BlockID) {
         guard isEditable else { return }
         guard multiSelection.isActive else {
-            isTextSelectionToolbarVisible = false
             return
         }
         document.focusedBlockID = nil
         document.pendingCursorOffset = nil
         multiSelection.toggle(blockID)
-        if !multiSelection.isActive {
-            isTextSelectionToolbarVisible = false
-        }
     }
 
     private func enterMultiSelection(with blockID: BlockID) {
@@ -268,7 +413,6 @@ struct BlockEditorView: View {
             multiSelection.selectedBlockIDs = [blockID]
             multiSelection.anchorID = blockID
         }
-        isTextSelectionToolbarVisible = false
     }
 
     private func handleRowDragChanged(
@@ -369,30 +513,6 @@ struct BlockEditorView: View {
         withAnimation(reduceMotion ? nil : AppAnimation.listInsert) {
             document.moveBlock(from: sourceIndex, to: destination)
         }
-    }
-
-    private func handleHandleDragChanged(
-        blockID: BlockID,
-        startY: CGFloat,
-        locationY: CGFloat
-    ) {
-        guard isEditable, !multiSelection.isActive else {
-            dragSession = nil
-            return
-        }
-        if dragSession == nil {
-            beginDragSession(for: blockID, originY: startY)
-        }
-        updateDragSession(for: blockID, startY: startY, locationY: locationY)
-    }
-
-    private func handleHandleDragEnded(
-        blockID: BlockID,
-        startY: CGFloat,
-        locationY: CGFloat
-    ) {
-        updateDragSession(for: blockID, startY: startY, locationY: locationY)
-        finishDragSession(for: blockID, entersMultiSelection: false)
     }
 
     private func copySelectedBlocks() {

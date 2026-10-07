@@ -13,5 +13,6 @@ struct RootView: View {
             sessionController: sessionController,
             draftStore: draftStore
         )
+        .tint(SuzuriTheme.accentText)
     }
 }

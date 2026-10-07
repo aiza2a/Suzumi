@@ -1,16 +1,39 @@
 import Foundation
 import SwiftData
+import Observation
 
 /// SwiftData 草稿仓库。
 @MainActor
+@Observable
 final class DraftStore {
-    enum DraftStoreError: Error, Equatable {
+    enum DraftStoreError: Error, Equatable, LocalizedError {
         case notFound
+        case unavailable
+        case scopeMismatch
+
+        var errorDescription: String? {
+            switch self {
+            case .notFound: "未找到本地草稿。"
+            case .unavailable: "无法打开本地草稿数据库。请重试，当前内容尚未保存。"
+            case .scopeMismatch: "这篇草稿属于另一个账号或服务器。请切回原账号后继续编辑。"
+            }
+        }
     }
 
-    let container: ModelContainer
+    private(set) var container: ModelContainer?
+    private(set) var initializationError: Error?
+    private(set) var lastReadError: Error?
+    var isAvailable: Bool { container != nil && initializationError == nil }
 
-    private let modelContext: ModelContext
+    @ObservationIgnored private let makeContainer: () throws -> ModelContainer
+    private var modelContext: ModelContext {
+        get throws {
+            guard let container, initializationError == nil else {
+                throw initializationError ?? DraftStoreError.unavailable
+            }
+            return container.mainContext
+        }
+    }
     private var debounceTasks: [UUID: Task<Void, Never>] = [:]
     private var pendingSaves: [UUID: DraftSnapshot] = [:]
 
@@ -26,32 +49,35 @@ final class DraftStore {
     /// The last synchronous or debounced save error, if any.
     private(set) var lastSaveError: Error?
 
-    init(inMemory: Bool = false) {
-        let configuration = ModelConfiguration(isStoredInMemoryOnly: inMemory)
-        let resolvedContainer: ModelContainer
-        do {
-            resolvedContainer = try ModelContainer(
-                for: Draft.self,
-                configurations: configuration
-            )
-        } catch {
-            // A damaged persistent store must not prevent the editor from launching.
-            // The user can continue in memory while the next save rebuilds local state.
-            let fallback = ModelConfiguration(isStoredInMemoryOnly: true)
-            resolvedContainer = try! ModelContainer(
-                for: Draft.self,
-                configurations: fallback
-            )
-        }
-        self.container = resolvedContainer
-        self.modelContext = resolvedContainer.mainContext
-        backfillLegacyScopes()
+    convenience init(inMemory: Bool = false) {
+        self.init(makeContainer: {
+            try ModelContainer(for: Draft.self,
+                               configurations: ModelConfiguration(isStoredInMemoryOnly: inMemory))
+        })
     }
 
-    init(container: ModelContainer) {
-        self.container = container
-        self.modelContext = container.mainContext
-        backfillLegacyScopes()
+    convenience init(container: ModelContainer) {
+        self.init(makeContainer: { container })
+    }
+
+    init(makeContainer: @escaping () throws -> ModelContainer) {
+        self.makeContainer = makeContainer
+        retryOpeningStore()
+    }
+
+    @discardableResult
+    func retryOpeningStore() -> Bool {
+        do {
+            if container == nil { container = try makeContainer() }
+            // Save only through explicit operations so a failed transaction cannot autosave later.
+            container?.mainContext.autosaveEnabled = false
+            initializationError = nil
+            try backfillLegacyScopes()
+            return true
+        } catch {
+            initializationError = error
+            return false
+        }
     }
 
     /// 保存草稿；同一个 id 会更新已有实体而不是插入重复记录。
@@ -62,20 +88,24 @@ final class DraftStore {
         origin: String? = nil,
         accountFingerprint: String? = nil
     ) throws {
-        debounceTasks[id]?.cancel()
-        debounceTasks[id] = nil
-        pendingSaves[id] = nil
         lastSaveError = nil
 
         do {
+            let modelContext = try self.modelContext
             let data = try JSONEncoder().encode(blocks)
             let draft: Draft
             if let existing = try fetchDraft(id: id) {
+                guard existing.origin == origin, existing.accountFingerprint == accountFingerprint else {
+                    throw DraftStoreError.scopeMismatch
+                }
                 draft = existing
             } else {
                 draft = Draft(id: id)
                 modelContext.insert(draft)
             }
+            debounceTasks[id]?.cancel()
+            debounceTasks[id] = nil
+            pendingSaves[id] = nil
             draft.title = title
             draft.blocksData = data
             // Saving after a published revision creates a new unpublished revision.
@@ -90,6 +120,11 @@ final class DraftStore {
             try modelContext.save()
             saveCount += 1
         } catch {
+            container?.mainContext.rollback()
+            if error as? DraftStoreError != .scopeMismatch {
+                pendingSaves[id] = DraftSnapshot(title: title, blocks: blocks, origin: origin,
+                                                 accountFingerprint: accountFingerprint)
+            }
             lastSaveError = error
             throw error
         }
@@ -145,20 +180,28 @@ final class DraftStore {
         accountFingerprint: String? = nil
     ) -> Draft? {
         do {
-            guard let draft = try fetchDraft(id: id),
+            let found = try fetchDraft(id: id)
+            if lastReadError != nil { lastReadError = nil }
+            guard let draft = found,
                   matchesScope(draft, origin: origin, accountFingerprint: accountFingerprint)
             else { return nil }
             return draft
         } catch {
+            if lastReadError?.localizedDescription != error.localizedDescription { lastReadError = error }
             return nil
         }
     }
 
     /// 返回所有草稿，最新修改的排在前面。
     func loadAll(origin: String? = nil, accountFingerprint: String? = nil) -> [Draft] {
-        ((try? modelContext.fetch(FetchDescriptor<Draft>())) ?? [])
-            .filter { matchesScope($0, origin: origin, accountFingerprint: accountFingerprint) }
-            .sorted { $0.updatedAt > $1.updatedAt }
+        do {
+            let drafts = try modelContext.fetch(FetchDescriptor<Draft>(sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]))
+            if lastReadError != nil { lastReadError = nil }
+            return drafts.filter { matchesScope($0, origin: origin, accountFingerprint: accountFingerprint) }
+        } catch {
+            if lastReadError?.localizedDescription != error.localizedDescription { lastReadError = error }
+            return []
+        }
     }
 
     /// Compatibility alias for list screens.
@@ -250,6 +293,13 @@ final class DraftStore {
                 lastSaveError = DraftStoreError.notFound
                 return false
             }
+            guard found.origin == origin,
+                  found.accountFingerprint == accountFingerprint ||
+                    (found.accountFingerprint == TokenStore.fingerprint("anonymous") && found.pagePath == nil)
+            else {
+                lastSaveError = DraftStoreError.notFound
+                return false
+            }
             draft = found
         } catch {
             lastSaveError = error
@@ -268,6 +318,30 @@ final class DraftStore {
             draft.accountFingerprint = oldAccountFingerprint
             lastSaveError = error
             return false
+        }
+    }
+
+    /// Claims only unpublished, unbound anonymous drafts from the selected origin.
+    /// Flush first so a delayed anonymous snapshot cannot undo the ownership change.
+    @discardableResult
+    func adoptAnonymousDrafts(origin: String, accountFingerprint: String) throws -> Int {
+        let anonymous = TokenStore.fingerprint("anonymous")
+        guard accountFingerprint != anonymous else { return 0 }
+        guard savePendingNow() else { throw lastSaveError ?? DraftStoreError.unavailable }
+        do {
+            let context = try modelContext
+            let drafts = try context.fetch(FetchDescriptor<Draft>()).filter {
+                $0.origin == origin && $0.accountFingerprint == anonymous &&
+                    $0.pagePath == nil && !$0.isPublished
+            }
+            for draft in drafts { draft.accountFingerprint = accountFingerprint }
+            if !drafts.isEmpty { try context.save() }
+            lastSaveError = nil
+            return drafts.count
+        } catch {
+            container?.mainContext.rollback()
+            lastSaveError = error
+            throw error
         }
     }
 
@@ -306,12 +380,13 @@ final class DraftStore {
         debounceTasks[id] = nil
         pendingSaves[id] = nil
         guard let draft = load(id: id) else { return false }
-        modelContext.delete(draft)
         do {
+            try modelContext.delete(draft)
             try modelContext.save()
             lastSaveError = nil
             return true
         } catch {
+            container?.mainContext.rollback()
             lastSaveError = error
             return false
         }
@@ -320,6 +395,10 @@ final class DraftStore {
     /// Flushes all pending snapshots before the app enters the background.
     @discardableResult
     func savePendingNow() -> Bool {
+        guard isAvailable else {
+            lastSaveError = initializationError ?? DraftStoreError.unavailable
+            return false
+        }
         lastSaveError = nil
         for task in debounceTasks.values {
             task.cancel()
@@ -350,7 +429,7 @@ final class DraftStore {
         return allSaved
     }
 
-    private func backfillLegacyScopes() {
+    private func backfillLegacyScopes() throws {
         let defaultOrigin = TokenStore.origin(for: "https://api.telegra.ph")
         let tokenStore = TokenStore()
         let token = tokenStore.loadString(.accessToken, origin: defaultOrigin)
@@ -375,6 +454,8 @@ final class DraftStore {
             }
         } catch {
             lastSaveError = error
+            container?.mainContext.rollback()
+            throw error
         }
     }
 
@@ -393,7 +474,8 @@ final class DraftStore {
     }
 
     private func fetchDraft(id: UUID) throws -> Draft? {
-        let drafts = try modelContext.fetch(FetchDescriptor<Draft>())
-        return drafts.first { $0.id == id }
+        var descriptor = FetchDescriptor<Draft>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
     }
 }

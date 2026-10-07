@@ -10,10 +10,13 @@ struct SlashCommandMenu: View {
     var onImageData: ((Data, BlockID) -> Void)? = nil
     var onImageError: ((Error, BlockID) -> Void)? = nil
     var onImagePickerLoadingChanged: ((Bool) -> Void)? = nil
+    var onRequestImage: ((BlockID?) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var didChooseCommand = false
     @State private var selectedFigureID: BlockID?
+    @State private var showLinkPrompt = false
+    @State private var linkAddress = ""
 
     var body: some View {
         NavigationStack {
@@ -21,7 +24,20 @@ struct SlashCommandMenu: View {
                 ForEach(BlockType.groupedByCategory, id: \.category) { group in
                     Section(group.category.displayName) {
                         ForEach(group.types, id: \.self) { type in
-                            if type == .figure, onImageData != nil {
+                            if type == .figure, let onRequestImage {
+                                Button {
+                                    // Keep the presenting row alive until sheet dismissal
+                                    // hands off to the image-hosting browser.
+                                    let figure = Block.figure(id: blockID, imageURL: nil, caption: "")
+                                    document.replaceBlock(id: blockID, with: figure)
+                                    document.focusedBlockID = figure.id
+                                    onRequestImage(figure.id)
+                                    finishChoice()
+                                } label: {
+                                    Label("图片", systemImage: "photo")
+                                }
+                                .disabled(!isImageActionEnabled)
+                            } else if type == .figure, onImageData != nil {
                                 figurePickerRow(type)
                             } else {
                                 Button {
@@ -51,6 +67,22 @@ struct SlashCommandMenu: View {
         }
         .presentationDetents([.height(320)])
         .presentationDragIndicator(.visible)
+        .alert("插入链接", isPresented: $showLinkPrompt) {
+            TextField("https://…", text: $linkAddress)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+                .autocorrectionDisabled()
+            Button("取消", role: .cancel) {}
+            Button("插入") {
+                guard let url = EditorLinkAddress.parse(linkAddress) else { return }
+                let link = Block.link(id: blockID, text: url.absoluteString, url: url)
+                document.replaceBlock(id: blockID, with: link)
+                document.focusedBlockID = blockID
+                document.pendingCursorOffset = 0
+                finishChoice()
+            }
+            .disabled(EditorLinkAddress.parse(linkAddress) == nil)
+        } message: { Text("请输入完整的 http 或 https 地址。") }
         .onDisappear {
             guard !didChooseCommand else { return }
             if selectedFigureID != nil {
@@ -89,6 +121,10 @@ struct SlashCommandMenu: View {
     }
 
     private func choose(_ type: BlockType) {
+        if type == .link {
+            showLinkPrompt = true
+            return
+        }
         discardPreparedFigure()
         let replacement = type.makeEmpty
         document.replaceBlock(id: blockID, with: replacement)

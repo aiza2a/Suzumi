@@ -229,6 +229,19 @@ struct BlockDecoder {
             } ?? false
 
         case "figure":
+            let children = node.children ?? []
+            let images = children.compactMap { child -> TelegraphNode? in
+                guard case let .node(value) = child, value.tag?.lowercased() == "img" else { return nil }
+                return value
+            }
+            let captions = children.filter { child in
+                guard case let .node(value) = child else { return false }
+                return value.tag?.lowercased() == "figcaption"
+            }
+            // One editor figure stores one image and one caption. Keep galleries and
+            // malformed sources read-only instead of silently dropping their content.
+            guard images.count == 1, captions.count <= 1,
+                  isSupportedImage(images[0]) else { return true }
             return node.children?.contains { child in
                 guard case let .node(childNode) = child else { return true }
                 switch childNode.tag?.lowercased() {
@@ -244,7 +257,7 @@ struct BlockDecoder {
         case "img":
             // An image block is supported only at the top level or inside a figure.
             guard isTopLevel else { return true }
-            return node.children?.isEmpty == false
+            return !isSupportedImage(node)
 
         case "hr":
             return node.children?.isEmpty == false
@@ -252,6 +265,16 @@ struct BlockDecoder {
         default:
             return true
         }
+    }
+
+    private static func isSupportedImage(_ node: TelegraphNode) -> Bool {
+        guard node.children?.isEmpty != false,
+              let source = node.attrs?["src"],
+              let url = URL(string: source),
+              let scheme = url.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              url.host != nil else { return false }
+        return true
     }
 
     static func decode(_ node: TelegraphNode) -> Block? {

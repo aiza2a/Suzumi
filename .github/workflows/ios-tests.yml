@@ -1,0 +1,83 @@
+name: iOS Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main, codex/suzuri-usability-redesign]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      revision:
+        description: Exact commit to test, independent of packaging and release
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.revision || github.sha }}
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90
+        with:
+          xcode-version: "26.3"
+      - name: Generate Xcode project
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          brew install xcodegen
+          xcodegen generate
+      - name: Select available iPhone simulator
+        run: |
+          set -euo pipefail
+          xcrun simctl list devices available --json > "$RUNNER_TEMP/simulators.json"
+          python3 <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          devices = json.loads((Path(os.environ["RUNNER_TEMP"]) / "simulators.json").read_text())["devices"]
+          candidates = [
+              (tuple(map(int, re.findall(r"\d+", runtime))), device["udid"])
+              for runtime, entries in devices.items() if ".iOS-" in runtime
+              for device in entries
+              if device.get("isAvailable") and device["name"].startswith("iPhone")
+          ]
+          if not candidates:
+              raise SystemExit("No available iPhone simulator found for the selected Xcode.")
+          _, udid = max(candidates)
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write(f"SIMULATOR_UDID={udid}\n")
+          print(f"Selected iPhone simulator: {udid}")
+          PY
+      - name: Run simulator tests
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          xcodebuild test \
+            -project Suzuri.xcodeproj \
+            -scheme Suzuri \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 240 \
+            -parallel-testing-enabled NO \
+            -derivedDataPath build/DerivedData \
+            -resultBundlePath build/Suzuri-tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee build/tests.log
+      - name: Upload test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Suzuri-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/Suzuri-tests.xcresult
+            build/tests.log
+          if-no-files-found: warn

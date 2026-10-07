@@ -1,8 +1,76 @@
 import XCTest
+import SwiftData
 @testable import Suzuri
 
 @MainActor
 final class DraftStoreTests: XCTestCase {
+    func testSaveRejectsScopeChangeWithoutOverwritingContentOrPendingEdits() throws {
+        let store = DraftStore(inMemory: true)
+        let origin = "https://api.telegra.ph"
+        let id = try store.createDraft(title: "Original", origin: origin, accountFingerprint: "owner")
+        store.scheduleSave(id: id, title: "Pending owner edit", blocks: [.emptyParagraph()],
+                           origin: origin, accountFingerprint: "owner")
+        let invalidScopes: [(String?, String?)] = [
+            (origin, TokenStore.fingerprint("anonymous")),
+            ("https://api.graph.org", "owner"),
+            (nil, nil)
+        ]
+        for (invalidOrigin, invalidAccount) in invalidScopes {
+            XCTAssertThrowsError(try store.saveNow(id: id, title: "Wrong account", blocks: [.emptyParagraph()],
+                                                  origin: invalidOrigin, accountFingerprint: invalidAccount)) {
+                XCTAssertEqual($0 as? DraftStore.DraftStoreError, .scopeMismatch)
+            }
+            XCTAssertEqual(store.load(id: id)?.title, "Original")
+            XCTAssertEqual(store.load(id: id)?.origin, origin)
+            XCTAssertEqual(store.load(id: id)?.accountFingerprint, "owner")
+        }
+        XCTAssertTrue(store.savePendingNow())
+        XCTAssertEqual(store.load(id: id)?.title, "Pending owner edit")
+    }
+
+    func testOpenFailureIsVisibleAndPendingContentSurvivesRetry() throws {
+        var canOpen = false
+        let store = DraftStore(makeContainer: {
+            guard canOpen else { throw CocoaError(.fileReadCorruptFile) }
+            return try ModelContainer(for: Draft.self,
+                                      configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        })
+        XCTAssertFalse(store.isAvailable)
+        XCTAssertNotNil(store.initializationError)
+        XCTAssertNil(store.container)
+        let id = UUID()
+        XCTAssertThrowsError(try store.saveNow(id: id, title: "Keep this", blocks: [.emptyParagraph()]))
+        XCTAssertEqual(store.saveCount, 0)
+        XCTAssertNil(store.load(id: id))
+        XCTAssertNotNil(store.lastReadError)
+        canOpen = true
+        XCTAssertTrue(store.retryOpeningStore())
+        XCTAssertTrue(store.savePendingNow())
+        XCTAssertEqual(store.load(id: id)?.title, "Keep this")
+    }
+
+    func testAdoptionIncludesAllUnboundAnonymousDraftsButNoOtherScope() throws {
+        let store = DraftStore(inMemory: true)
+        let origin = "https://api.telegra.ph"
+        let anonymous = TokenStore.fingerprint("anonymous")
+        let first = try store.createDraft(origin: origin, accountFingerprint: anonymous)
+        let second = try store.createDraft(origin: origin, accountFingerprint: anonymous)
+        let other = try store.createDraft(origin: "https://api.graph.org", accountFingerprint: anonymous)
+        let owned = try store.createDraft(origin: origin, accountFingerprint: "other-account")
+        let linked = try store.createDraft(origin: origin, accountFingerprint: anonymous)
+        XCTAssertTrue(store.setPagePath(id: linked, pagePath: "existing-page"))
+        store.scheduleSave(id: first, title: "Latest unsaved edit", blocks: [.emptyParagraph()],
+                           origin: origin, accountFingerprint: anonymous)
+        XCTAssertEqual(try store.adoptAnonymousDrafts(origin: origin, accountFingerprint: "new-account"), 2)
+        XCTAssertEqual(try store.adoptAnonymousDrafts(origin: origin, accountFingerprint: "new-account"), 0)
+        XCTAssertEqual(store.load(id: first)?.accountFingerprint, "new-account")
+        XCTAssertEqual(store.load(id: first)?.title, "Latest unsaved edit")
+        XCTAssertEqual(store.load(id: second)?.accountFingerprint, "new-account")
+        XCTAssertEqual(store.load(id: other)?.accountFingerprint, anonymous)
+        XCTAssertEqual(store.load(id: owned)?.accountFingerprint, "other-account")
+        XCTAssertEqual(store.load(id: linked)?.accountFingerprint, anonymous)
+    }
+
     func testSaveAndLoadPreservesDraftContent() throws {
         let store = DraftStore(inMemory: true)
         let id = UUID()

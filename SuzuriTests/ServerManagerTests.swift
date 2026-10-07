@@ -18,6 +18,16 @@ final class ServerManagerTests: XCTestCase {
         XCTAssertEqual(ServerManager(defaults: defaults).current, .telegraph)
     }
 
+    func testCustomMirrorRejectsEmbeddedCredentialsAndQuery() {
+        let manager = ServerManager(defaults: makeDefaults())
+        manager.current = .custom
+        for value in ["https://user:pass@example.test", "https://example.test?token=x", "https://example.test#fragment"] {
+            manager.customAPIBase = value
+            XCTAssertNil(manager.apiURL)
+            XCTAssertNotNil(manager.configurationError)
+        }
+    }
+
     func testCurrentMirrorPersists() {
         let defaults = makeDefaults()
         let manager = ServerManager(defaults: defaults)

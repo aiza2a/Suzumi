@@ -48,21 +48,22 @@ struct BlockTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: BlockUITextView, context: Context) {
+        context.coordinator.updateBinding($text)
+        let wasEditable = textView.isEditable
         textView.isEditable = isFocused && isEditable
-        if (!isFocused || !isEditable), textView.isFirstResponder {
+        if wasEditable, !textView.isEditable, textView.isFirstResponder {
             textView.resignFirstResponder()
         }
         textView.placeholder = placeholder
-        textView.font = font
-        textView.textColor = textColor
-        textView.typingAttributes = typingAttributes
+        if textView.markedTextRange == nil {
+            textView.font = font
+            textView.textColor = textColor
+            textView.typingAttributes = typingAttributes
+        }
         configureCallbacks(on: textView, coordinator: context.coordinator)
 
-        if textView.text != text, !context.coordinator.isEditing {
-            let selectedRange = textView.selectedRange
-            textView.text = text
-            textView.selectedRange = clampedRange(selectedRange, textLength: textView.text.utf16.count)
-        }
+        context.coordinator.synchronize(text, into: textView)
+        guard textView.markedTextRange == nil else { return }
 
         if isFocused && isEditable, let pendingOffset = pendingCursorOffset?.wrappedValue {
             let clampedOffset = max(0, min(pendingOffset, textView.text.utf16.count))
@@ -88,6 +89,12 @@ struct BlockTextView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text, onSelectionChange: onSelectionChange)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: BlockUITextView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width > 0 else { return nil }
+        let size = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        return CGSize(width: width, height: max(font.lineHeight, ceil(size.height)))
     }
 
     private var typingAttributes: [NSAttributedString.Key: Any] {
@@ -117,15 +124,8 @@ struct BlockTextView: UIViewRepresentable {
         coordinator.onSelectionChange = onSelectionChange
     }
 
-    private func clampedRange(_ range: NSRange, textLength: Int) -> NSRange {
-        let location = max(0, min(range.location, textLength))
-        let length = max(0, min(range.length, textLength - location))
-        return NSRange(location: location, length: length)
-    }
-
     final class Coordinator: NSObject, UITextViewDelegate {
         @Binding var text: String
-        var isEditing = false
         var onSelectionChange: ((_ range: NSRange, _ screenRect: CGRect?) -> Void)?
 
         init(
@@ -136,8 +136,28 @@ struct BlockTextView: UIViewRepresentable {
             self.onSelectionChange = onSelectionChange
         }
 
+        /// Focus is not an editing transaction: merges and toolbar changes must reach
+        /// the active view too. Marked text is owned by the input method until committed.
+        func synchronize(_ modelText: String, into textView: UITextView) {
+            guard textView.markedTextRange == nil, textView.text != modelText else { return }
+            let selection = textView.selectedRange
+            // UIKit's previous text-only undo history does not include a block merge.
+            // Keeping it would allow undo to overwrite the newly joined paragraph.
+            textView.undoManager?.removeAllActions()
+            textView.text = modelText
+            let location = min(selection.location, modelText.utf16.count)
+            textView.selectedRange = NSRange(
+                location: location,
+                length: min(selection.length, modelText.utf16.count - location)
+            )
+            textView.invalidateIntrinsicContentSize()
+        }
+
+        func updateBinding(_ binding: Binding<String>) {
+            _text = binding
+        }
+
         func textViewDidBeginEditing(_ textView: UITextView) {
-            isEditing = true
             notifySelectionChange(for: textView)
         }
 
@@ -148,6 +168,7 @@ struct BlockTextView: UIViewRepresentable {
         ) -> Bool {
             guard let blockTextView = textView as? BlockUITextView else { return true }
             guard blockTextView.isEditable else { return false }
+            guard textView.markedTextRange == nil else { return true }
             if replacement == "\n", blockTextView.onEnter != nil {
                 blockTextView.onEnterWithSelection?(range)
                 return false
@@ -181,7 +202,6 @@ struct BlockTextView: UIViewRepresentable {
 
         func handleEnter(range: NSRange, in textView: BlockUITextView) {
             if range.length > 0 {
-                isEditing = true
                 let currentText = textView.text as NSString
                 textView.text = currentText.replacingCharacters(in: range, with: "")
                 textView.selectedRange = NSRange(location: range.location, length: 0)
@@ -189,18 +209,17 @@ struct BlockTextView: UIViewRepresentable {
             }
             textView.resignFirstResponder()
             textView.onEnter?(range.location)
-            isEditing = false
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
-            isEditing = false
             notifySelectionChange(for: textView)
         }
 
         func textViewDidChange(_ textView: UITextView) {
             guard let blockTextView = textView as? BlockUITextView else { return }
-            isEditing = true
-            text = textView.text
+            if textView.markedTextRange == nil {
+                text = textView.text
+            }
             blockTextView.invalidateIntrinsicContentSize()
         }
 
@@ -264,8 +283,22 @@ final class BlockUITextView: UITextView {
         _ = becomeFirstResponder()
     }
 
+    override func unmarkText() {
+        let wasComposing = markedTextRange != nil
+        super.unmarkText()
+        // Some input methods end composition without another didChange callback.
+        // Publish the committed text before save, focus transfer, or a toolbar action.
+        if wasComposing, markedTextRange == nil {
+            delegate?.textViewDidChange?(self)
+        }
+    }
+
     override func insertText(_ text: String) {
         guard isEditable else { return }
+        guard markedTextRange == nil else {
+            super.insertText(text)
+            return
+        }
         if text == "\n", let onEnter {
             if let onEnterWithSelection {
                 onEnterWithSelection(selectedRange)
@@ -292,6 +325,10 @@ final class BlockUITextView: UITextView {
 
     override func deleteBackward() {
         guard isEditable else { return }
+        guard markedTextRange == nil else {
+            super.deleteBackward()
+            return
+        }
         goalColumnXBinding?.wrappedValue = nil
         if selectedRange.length == 0,
            selectedRange.location == 0,
@@ -308,7 +345,7 @@ final class BlockUITextView: UITextView {
             super.pressesBegan(presses, with: event)
             return
         }
-        guard let key = presses.first?.key else {
+        guard markedTextRange == nil, let key = presses.first?.key else {
             super.pressesBegan(presses, with: event)
             return
         }
@@ -346,13 +383,15 @@ final class BlockUITextView: UITextView {
                 super.pressesBegan(presses, with: event)
             }
         case .keyboardUpArrow:
-            if isOnFirstLogicalLine, let onArrowUp {
+            if key.modifierFlags.isEmpty, selectedRange.length == 0,
+               isOnFirstVisualLine, let onArrowUp {
                 onArrowUp(cursorXPosition())
             } else {
                 super.pressesBegan(presses, with: event)
             }
         case .keyboardDownArrow:
-            if isOnLastLogicalLine, let onArrowDown {
+            if key.modifierFlags.isEmpty, selectedRange.length == 0,
+               isOnLastVisualLine, let onArrowDown {
                 onArrowDown(cursorXPosition())
             } else {
                 super.pressesBegan(presses, with: event)
@@ -362,18 +401,18 @@ final class BlockUITextView: UITextView {
         }
     }
 
-    private var isOnFirstLogicalLine: Bool {
-        let location = selectedRange.location
-        guard location > 0 else { return true }
-        let prefix = (text as NSString).substring(to: min(location, text.utf16.count))
-        return !prefix.contains("\n")
+    var isOnFirstVisualLine: Bool {
+        layoutIfNeeded()
+        let current = caretRect(for: selectedTextRange?.start ?? beginningOfDocument)
+        let first = caretRect(for: beginningOfDocument)
+        return abs(current.minY - first.minY) < 1
     }
 
-    private var isOnLastLogicalLine: Bool {
-        let location = selectedRange.location
-        guard location < text.utf16.count else { return true }
-        let suffix = (text as NSString).substring(from: min(location, text.utf16.count))
-        return !suffix.contains("\n")
+    var isOnLastVisualLine: Bool {
+        layoutIfNeeded()
+        let current = caretRect(for: selectedTextRange?.start ?? beginningOfDocument)
+        let last = caretRect(for: endOfDocument)
+        return abs(current.minY - last.minY) < 1
     }
 
     private func cursorXPosition() -> CGFloat {

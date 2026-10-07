@@ -6,7 +6,7 @@ struct ImagePipeline: Sendable {
     /// 测试或调用方可注入缓存目录；未指定时使用 Library/Caches/Images。
     private let cacheDirectory: URL?
 
-    init(uploadService: ImageUploadService = ImageUploadService(),
+    init(uploadService: ImageUploadService,
          cacheDirectory: URL? = nil) {
         self.uploadService = uploadService
         self.cacheDirectory = cacheDirectory

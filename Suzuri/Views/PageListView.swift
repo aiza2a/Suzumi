@@ -35,6 +35,26 @@ struct PageListView: View {
     @State private var canRetryError = false
     @State private var path: [Destination] = []
     @State private var isShowingSettings = false
+    @State private var searchText = ""
+    @State private var libraryFilter = LibraryFilter.all
+
+    private enum LibraryFilter: String, CaseIterable, Identifiable {
+        case all = "全部", drafts = "草稿", published = "已发布"
+        var id: String { rawValue }
+    }
+
+    private var visibleDrafts: [Draft] {
+        guard libraryFilter != .published else { return [] }
+        return drafts.filter { searchText.isEmpty || $0.title.localizedCaseInsensitiveContains(searchText) }
+    }
+
+    private var visiblePages: [Page] {
+        guard libraryFilter != .drafts else { return [] }
+        return pages.filter {
+            searchText.isEmpty || $0.title.localizedCaseInsensitiveContains(searchText)
+                || $0.description.localizedCaseInsensitiveContains(searchText)
+        }
+    }
 
     init(
         sessionController: SessionController,
@@ -54,114 +74,101 @@ struct PageListView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            ZStack(alignment: .top) {
-                AppBackground()
-
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ReachabilityBanner(isConnected: reachability.isConnected)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                        if sessionController.isAnonymous {
-                            Label("未登录，首次发布时会自动创建账号", systemImage: "person.crop.circle.badge.questionmark")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 9)
-                                .appGlass(cornerRadius: 16, allowsShadow: false)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 16)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("写下此刻。")
+                                .font(.system(.largeTitle, design: .serif, weight: .bold))
+                                .foregroundStyle(SuzuriTheme.ink)
+                            Text("从一行文字，到一篇值得分享的文章。")
+                                .font(.subheadline).foregroundStyle(SuzuriTheme.secondaryInk)
                         }
-
-                        if !drafts.isEmpty {
-                            sectionHeader("草稿")
-                            ForEach(drafts, id: \.id) { draft in
-                                DraftRowView(draft: draft)
-                                    .padding(.horizontal, 16)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        path.append(.draft(draft.id))
-                                    }
-                                    .contextMenu {
-                                        Button("编辑", systemImage: "pencil") {
-                                            path.append(.draft(draft.id))
-                                        }
-                                        Button("本地删除", systemImage: "trash", role: .destructive) {
-                                            deleteDraft(draft)
-                                        }
-                                    }
+                        Spacer(minLength: 8)
+                        Image(systemName: "square.and.pencil")
+                            .font(.title2).foregroundStyle(SuzuriTheme.accentText)
+                            .padding(12).background(SuzuriTheme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    }
+                    .padding(.vertical, 12)
+                    ReachabilityBanner(isConnected: reachability.isConnected)
+                    if !draftStore.isAvailable || draftStore.lastReadError != nil || draftStore.lastSaveError != nil {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("草稿存储需要处理", systemImage: "exclamationmark.triangle")
+                                .font(.headline)
+                            Text("暂时无法读写本地草稿。重试成功前，请不要退出尚未保存的文章。")
+                                .font(.subheadline)
+                            Button("重新打开草稿库") {
+                                if draftStore.retryOpeningStore() {
+                                    draftStore.savePendingNow()
+                                    Task { await reload() }
+                                }
                             }
                         }
-
-                        if !pages.isEmpty {
-                            sectionHeader("已发布")
-                            ForEach(pages) { page in
-                                PageRowView(page: page, lastSeen: pageLastSeen[page.path])
-                                    .padding(.horizontal, 16)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        openPage(page)
-                                    }
-                                    .contextMenu {
-                                        Button("编辑", systemImage: "pencil") {
-                                            openPage(page)
-                                        }
-                                        Button("复制链接", systemImage: "link") {
-                                            UIPasteboard.general.string = page.url
-                                        }
-                                        Button("本地删除", systemImage: "trash", role: .destructive) {
-                                            hidePage(page)
-                                        }
-                                    }
-                            }
-                        }
-
-                        if hasMorePages && !isLoading {
-                            ProgressView("加载更多…")
-                                .padding(.vertical, 12)
-                                .onAppear {
-                                    Task { @MainActor in await loadMoreIfNeeded() }
+                        .padding(16).background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 18))
+                    }
+                    Picker("文章分类", selection: $libraryFilter) {
+                        ForEach(LibraryFilter.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.bottom, 6)
+                    if !visibleDrafts.isEmpty {
+                        sectionHeader("草稿 · \(visibleDrafts.count)")
+                        ForEach(visibleDrafts, id: \.id) { draft in
+                            Button { path.append(.draft(draft.id)) } label: { DraftRowView(draft: draft) }
+                                .buttonStyle(.plain)
+                                .contextMenu {
+                                    Button("删除草稿", systemImage: "trash", role: .destructive) { deleteDraft(draft) }
                                 }
                         }
-
-                        if isLoading || isInitialLoading {
-                            ProgressView("加载中…")
-                                .padding(.top, 48)
-                        } else if drafts.isEmpty && pages.isEmpty {
-                            EmptyStateView(
-                                systemImage: "doc.text",
-                                title: "还没有文章",
-                                message: "在编辑器写下第一篇，发布后会出现在这里。"
-                            )
-                            .frame(minHeight: 360)
+                    }
+                    if !visiblePages.isEmpty {
+                        sectionHeader("已发布 · \(visiblePages.count)")
+                        ForEach(visiblePages) { page in
+                            Button { openPage(page) } label: { PageRowView(page: page, lastSeen: pageLastSeen[page.path]) }
+                                .buttonStyle(.plain)
+                                .contextMenu {
+                                    Button("复制链接", systemImage: "link") { UIPasteboard.general.string = page.url }
+                                    Button("从列表隐藏", systemImage: "eye.slash") { hidePage(page) }
+                                }
                         }
                     }
-                    .padding(.top, 8)
-                    .padding(.bottom, 24)
+                    if isLoading || isInitialLoading {
+                        ProgressView("正在读取…").frame(maxWidth: .infinity).padding(28)
+                    } else if visibleDrafts.isEmpty && visiblePages.isEmpty {
+                        ContentUnavailableView {
+                            Label(searchText.isEmpty ? "从第一句话开始" : "没有匹配的文章", systemImage: "doc.text")
+                        } description: {
+                            Text(searchText.isEmpty ? "草稿会自动保存在这台设备，写好后再发布。" : "试试其他标题关键词，或加载更多文章。")
+                        } actions: {
+                            if searchText.isEmpty {
+                                Button("写新文章", action: createDraftAndOpen).buttonStyle(PrimaryActionStyle())
+                                    .disabled(!draftStore.isAvailable)
+                            }
+                        }
+                    }
+                    if hasMorePages && !isLoading && libraryFilter != .drafts {
+                        Button("加载更多文章") { Task { await loadMoreIfNeeded() } }
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                    }
                 }
-                .refreshable {
-                    await sessionController.load()
-                    await reload()
-                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 32)
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
             }
-            .navigationTitle("文章")
+            .background(SuzuriTheme.background)
+            .navigationTitle("Suzuri · 硯")
             .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $searchText, prompt: "搜索文章标题")
+            .refreshable { await sessionController.load(); await reload() }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        isShowingSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("设置")
+                    Button { isShowingSettings = true } label: { Image(systemName: "person.crop.circle") }
+                        .accessibilityLabel("账号与设置")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        createDraftAndOpen()
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .accessibilityLabel("新建文章")
+                    Button(action: createDraftAndOpen) { Image(systemName: "plus") }
+                        .accessibilityLabel("写新文章").disabled(!draftStore.isAvailable)
                 }
             }
             .navigationDestination(for: Destination.self) { destination in
@@ -169,60 +176,41 @@ struct PageListView: View {
                 case .draft(let id):
                     EditorScreen(draftID: id, sessionController: sessionController, draftStore: draftStore)
                 case .page(let page, let draftID):
-                    EditorScreen(
-                        draftID: draftID,
-                        page: page,
-                        sessionController: sessionController,
-                        draftStore: draftStore
-                    )
+                    EditorScreen(draftID: draftID, page: page, sessionController: sessionController, draftStore: draftStore)
                 }
             }
-            .sheet(isPresented: $isShowingSettings) {
-                NavigationStack {
-                    SettingsView(sessionController: sessionController, showsDoneButton: true)
-                }
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+            .sheet(isPresented: $isShowingSettings, onDismiss: {
+                Task { await sessionController.load(); await reload() }
+            }) {
+                NavigationStack { SettingsView(sessionController: sessionController, showsDoneButton: true) }
             }
             .task {
                 guard !hasLoaded else { return }
                 hasLoaded = true
                 isInitialLoading = true
+                ImageHostConfiguration.migrateProvider()
                 await sessionController.load()
                 await reload()
                 isInitialLoading = false
             }
             .onAppear {
                 guard hasLoaded, !isInitialLoading, !isLoading else { return }
-                Task { @MainActor in
-                    await sessionController.load()
-                    await reload()
-                }
+                Task { await sessionController.load(); await reload() }
             }
             .onChange(of: reachability.isConnected) { wasConnected, isConnected in
                 guard !wasConnected, isConnected else { return }
-                Task { @MainActor in
-                    await sessionController.load()
-                    await reload()
-                }
+                Task { await sessionController.load(); await reload() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .pageDidPublish)) { notification in
                 guard let page = notification.object as? Page else { return }
                 upsertPublishedPage(page)
             }
-            .alert("加载失败", isPresented: Binding(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
+            .alert("操作未完成", isPresented: Binding(
+                get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
             )) {
-                if canRetryError {
-                    Button("重试") {
-                        Task { @MainActor in await reload() }
-                    }
-                }
-                Button("好", role: .cancel) { errorMessage = nil }
-            } message: {
-                Text(errorMessage ?? "")
-            }
+                if canRetryError { Button("重试") { Task { await reload() } } }
+                Button("好", role: .cancel) {}
+            } message: { Text(errorMessage ?? "") }
         }
     }
 
@@ -232,7 +220,6 @@ struct PageListView: View {
                 .font(.title3.weight(.semibold))
             Spacer()
         }
-        .padding(.horizontal, 20)
         .padding(.top, 10)
         .accessibilityAddTraits(.isHeader)
     }
@@ -253,6 +240,14 @@ struct PageListView: View {
             }
         }
 
+        if !sessionController.isAnonymous {
+            do {
+                try draftStore.adoptAnonymousDrafts(origin: requestOrigin,
+                                                    accountFingerprint: sessionController.accountFingerprint)
+            } catch {
+                errorMessage = ErrorPresenter.message(for: error)
+            }
+        }
         hiddenPagePaths = Set(UserDefaults.standard.stringArray(forKey: scopedHiddenPagesKey) ?? [])
         drafts = draftStore.loadAll(
             origin: requestOrigin,
@@ -304,6 +299,9 @@ struct PageListView: View {
                   !Task.isCancelled
             else { return }
             if sessionController.handleAuthenticationFailure(error) {
+                drafts = draftStore.loadAll(origin: sessionController.currentOrigin,
+                                            accountFingerprint: sessionController.accountFingerprint)
+                    .filter { !$0.isPublished }
                 pages = []
                 totalPageCount = 0
                 nextOffset = 0
@@ -357,6 +355,9 @@ struct PageListView: View {
                   !Task.isCancelled
             else { return }
             if sessionController.handleAuthenticationFailure(error) {
+                drafts = draftStore.loadAll(origin: sessionController.currentOrigin,
+                                            accountFingerprint: sessionController.accountFingerprint)
+                    .filter { !$0.isPublished }
                 pages = []
                 totalPageCount = 0
                 nextOffset = 0
@@ -513,7 +514,7 @@ private struct PageRowView: View {
                 HStack(spacing: 12) {
                     Label("\(page.views)", systemImage: "eye")
                         .monospacedDigit()
-                    Text(SuzuriTimeLabel.string(from: lastSeen ?? Date()))
+                    Text("Telegraph")
                     Spacer()
                     Image(systemName: page.canEdit ? "pencil" : "lock")
                         .foregroundStyle(.tertiary)

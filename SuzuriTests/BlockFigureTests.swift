@@ -5,6 +5,32 @@ import XCTest
 final class BlockFigureTests: XCTestCase {
     private let imageURL = URL(string: "https://qu.ax/file/example.jpg")!
 
+    func testGalleryCannotBeRepublishedThroughSingleImageEditor() {
+        let image = TelegraphNode(tag: "img", attrs: ["src": imageURL.absoluteString], children: nil)
+        let gallery = TelegraphNode(tag: "figure", attrs: nil, children: [.node(image), .node(image)])
+        XCTAssertTrue(BlockDecoder.containsUnsupportedNodes([gallery]))
+    }
+
+    func testDuplicateCaptionsCannotBeSilentlyCombined() {
+        let image = TelegraphNode(tag: "img", attrs: ["src": imageURL.absoluteString], children: nil)
+        let caption = TelegraphNode(tag: "figcaption", attrs: nil, children: [.text("说明")])
+        let figure = TelegraphNode(tag: "figure", attrs: nil, children: [.node(image), .node(caption), .node(caption)])
+        XCTAssertTrue(BlockDecoder.containsUnsupportedNodes([figure]))
+    }
+
+    func testMissingImageSourceIsUnsupported() {
+        let image = TelegraphNode(tag: "img", attrs: nil, children: nil)
+        XCTAssertTrue(BlockDecoder.containsUnsupportedNodes([image]))
+        XCTAssertTrue(BlockDecoder.containsUnsupportedNodes([
+            TelegraphNode(tag: "figure", attrs: nil, children: [.node(image)])
+        ]))
+    }
+
+    func testOrdinaryFigureRemainsEditable() {
+        let figure = Block.figure(id: UUID(), imageURL: imageURL, caption: "说明")
+        XCTAssertFalse(BlockDecoder.containsUnsupportedNodes(BlockEncoder.toNodes([figure])))
+    }
+
     private func children(of node: TelegraphNode) -> [TelegraphNode.NodeChild] {
         node.children ?? []
     }

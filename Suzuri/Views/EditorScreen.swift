@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 文章编辑与发布界面。
 ///
@@ -10,6 +11,9 @@ struct EditorScreen: View {
 
     @State private var draftID: UUID
     private let draftStore: DraftStore
+    private let expectsExistingDraft: Bool
+    @State private var editorOrigin: String
+    @State private var editorAccount: String
     /// Optional test injection; production creates the pipeline from current settings per upload.
     private let injectedImagePipeline: ImagePipeline?
 
@@ -31,6 +35,8 @@ struct EditorScreen: View {
     @State private var isPageLoadError = false
     @State private var isDraftSaveError = false
     @State private var requestGeneration = 0
+    @State private var imageRequestGeneration = 0
+    @State private var isDraftCorrupt = false
     @State private var isCancelled = false
     @State private var remoteEditUnavailable = false
     @State private var hasUnsupportedContent = false
@@ -43,6 +49,9 @@ struct EditorScreen: View {
     @State private var retryImageData: Data?
     @State private var retryFigureID: UUID?
     @State private var imageProviderMessage: String?
+    @State private var isShowingPostimages = false
+    @State private var pendingImageTarget: UUID?
+    @State private var replacesPendingFigure = false
 
     init(
         draftID: UUID? = nil,
@@ -61,6 +70,9 @@ struct EditorScreen: View {
 
         self._draftID = State(initialValue: draftID ?? UUID())
         self.draftStore = draftStore
+        self.expectsExistingDraft = draftID != nil && page == nil
+        self._editorOrigin = State(initialValue: sessionController.currentOrigin)
+        self._editorAccount = State(initialValue: sessionController.accountFingerprint)
         self.injectedImagePipeline = imagePipeline
         self._sessionController = State(initialValue: sessionController)
         self._currentPage = State(initialValue: page)
@@ -85,100 +97,24 @@ struct EditorScreen: View {
     }
 
     var body: some View {
-        ZStack {
-            AppBackground()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    ReachabilityBanner(isConnected: reachability.isConnected)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if isLoadingPage {
-                        ProgressView("正在拉取文章…")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    TextField("无标题", text: $title)
-                        .font(.largeTitle.weight(.bold))
-                        .textInputAutocapitalization(.sentences)
-                        .submitLabel(.next)
-                        .disabled(!canEdit || isHydrating || isPublishing)
-
-                    Divider()
-                        .opacity(0.4)
-
-                    // D3 block editor owns all structured text, lists, figures, and focus state.
-                    BlockEditorView(
-                        isEditable: canEdit && !isHydrating && !isPublishing,
-                        isImageActionEnabled: isImageActionEnabled,
-                        uploadingFigureID: uploadingFigureID,
-                        onImageData: { data, targetID in
-                            Task { @MainActor in
-                                await uploadImage(data, intoFigure: targetID)
-                            }
-                        },
-                        onImageError: { error, targetID in
-                            imageUploadErrorMessage = ErrorPresenter.message(for: error)
-                            retryImageData = nil
-                            retryFigureID = targetID
-                        },
-                        onImagePickerLoadingChanged: { isLoading in
-                            isPickingImage = isLoading
-                        }
-                    )
-                    .frame(minHeight: 240, maxHeight: 480)
-                    .environment(document)
-
-                    if let imageProviderMessage {
-                        Label(imageProviderMessage, systemImage: "checkmark.circle")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if hasUnsupportedContent {
-                        Label("页面包含暂不支持的内容，发布前请在浏览器中编辑", systemImage: "exclamationmark.triangle")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                    }
-
-                    if let currentPage, !currentPage.canEdit,
-                       let url = browserURL(for: currentPage) {
-                        Link(destination: url) {
-                            Label("在浏览器打开", systemImage: "safari")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(Color.brand600)
-                        }
-                        .padding(.top, 4)
-                    }
-
-                    if let url = publishedURL {
-                        AppGlassCard(cornerRadius: 20) {
-                            HStack {
-                                Label("发布成功", systemImage: "checkmark.circle.fill")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(Color.brand600)
-                                Spacer()
-                                ShareLink(item: url) {
-                                    Image(systemName: "square.and.arrow.up")
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(Color.brand600)
-                                }
-                                .accessibilityLabel("分享链接")
-                            }
-                            Text(url.absoluteString)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .padding(.top, 2)
-                        }
-                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 24)
-            }
-        }
+        BlockEditorView(
+            isEditable: canEdit && !isHydrating && !isPublishing,
+            isImageActionEnabled: isImageActionEnabled,
+            uploadingFigureID: uploadingFigureID,
+            onImageData: { data, targetID in
+                Task { @MainActor in await uploadImage(data, intoFigure: targetID) }
+            },
+            onImageError: { error, targetID in
+                imageUploadErrorMessage = ErrorPresenter.message(for: error)
+                retryImageData = nil
+                retryFigureID = targetID
+            },
+            onImagePickerLoadingChanged: { isPickingImage = $0 },
+            onRequestImage: usesPostimages ? requestPostimages : nil,
+            header: AnyView(documentHeader)
+        )
+        .environment(document)
+        .background(SuzuriTheme.paper)
         .navigationTitle(currentPage == nil ? "新文章" : "编辑文章")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
@@ -192,6 +128,14 @@ struct EditorScreen: View {
                 .accessibilityLabel("返回文章列表")
             }
             ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    ShareLink(item: exportText) { Label("导出文本", systemImage: "square.and.arrow.up") }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .accessibilityLabel("文章操作")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     Task { @MainActor in await publish() }
                 } label: {
@@ -200,7 +144,7 @@ struct EditorScreen: View {
                             ProgressView()
                                 .tint(.white)
                         } else {
-                            Text("发布")
+                            Text(editPath == nil ? "发布" : "更新")
                         }
                     }
                     .font(.subheadline.weight(.semibold))
@@ -214,6 +158,13 @@ struct EditorScreen: View {
                 .disabled(!canPublish)
                 .accessibilityLabel("发布")
             }
+        }
+        .sheet(isPresented: $isShowingPostimages) {
+            PostimagesUploadView { url in insertHostedImage(url) }
+        }
+        .onChange(of: authorName) { _, _ in markChangedAndScheduleSave() }
+        .onChange(of: draftStore.lastSaveError?.localizedDescription) { _, value in
+            if value != nil, let error = draftStore.lastSaveError { presentDraftSaveError(error) }
         }
         .onAppear {
             isCancelled = false
@@ -229,6 +180,7 @@ struct EditorScreen: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background {
+                commitTextInput()
                 saveDraftNow()
             }
         }
@@ -252,6 +204,7 @@ struct EditorScreen: View {
             saveDraftNow()
             isCancelled = true
             requestGeneration += 1
+            imageRequestGeneration += 1
         }
         .alert("图片上传失败", isPresented: Binding(
             get: { imageUploadErrorMessage != nil },
@@ -289,7 +242,9 @@ struct EditorScreen: View {
             if canRetryError {
                 Button("重试") {
                     Task { @MainActor in
-                        if isPageLoadError, let path = editPath {
+                        if isDraftSaveError {
+                            if draftStore.retryOpeningStore() { saveDraftNow() }
+                        } else if isPageLoadError, let path = editPath {
                             remoteEditUnavailable = false
                             await refreshPage(
                                 path: path,
@@ -311,13 +266,113 @@ struct EditorScreen: View {
         }
         .alert("有未发布草稿，确定退出？", isPresented: $isShowingExitConfirmation) {
             Button("退出", role: .destructive) {
-                dismiss()
+                if saveDraftNow() { dismiss() }
             }
             Button("继续编辑", role: .cancel) {}
         } message: {
-            Text("当前内容已保存在本地草稿中。退出后仍可从文章列表继续编辑。")
+            Text("退出前会再次保存草稿。保存成功后，可从文章列表继续编辑。")
         }
         .sensoryFeedback(.success, trigger: publishedURL)
+    }
+
+    private var documentHeader: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ReachabilityBanner(isConnected: reachability.isConnected)
+            HStack(spacing: 6) {
+                Circle().fill(draftStore.lastSaveError == nil ? Color.green : Color.orange)
+                    .frame(width: 6, height: 6)
+                Text(isHydrating ? "正在打开…" : (draftStore.lastSaveError != nil ? "尚未保存" : "本地草稿 · 自动保存"))
+                    .font(.caption).foregroundStyle(SuzuriTheme.secondaryInk)
+                Spacer()
+                Text("\(document.blocks.count) 个区块").font(.caption).foregroundStyle(.tertiary)
+            }
+            TextField("给文章起个名字", text: $title, axis: .vertical)
+                .font(.system(.largeTitle, design: .serif, weight: .bold))
+                .foregroundStyle(SuzuriTheme.ink)
+                .disabled(!canEdit || isHydrating || isPublishing)
+                .accessibilityIdentifier("editor.title")
+            if !authorName.isEmpty {
+                Label(authorName, systemImage: "person.crop.circle")
+                    .font(.subheadline).foregroundStyle(SuzuriTheme.secondaryInk)
+            }
+            if isLoadingPage { ProgressView("正在读取文章…") }
+            if let imageProviderMessage {
+                Text(imageProviderMessage).font(.footnote).foregroundStyle(.secondary)
+            }
+            if hasUnsupportedContent {
+                Label("这篇文章包含暂不支持的格式，为保留完整内容，请在浏览器中修改。", systemImage: "lock.doc")
+                    .font(.footnote).foregroundStyle(.orange)
+            }
+            if let page = currentPage, (!page.canEdit || hasUnsupportedContent), let url = browserURL(for: page) {
+                Link("在浏览器中打开", destination: url).font(.subheadline)
+            }
+            if let url = publishedURL {
+                HStack {
+                    Label("已发布", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    Spacer()
+                    ShareLink(item: url) { Label("分享文章", systemImage: "square.and.arrow.up") }
+                }
+                .font(.subheadline)
+                .padding(14)
+                .background(SuzuriTheme.background, in: RoundedRectangle(cornerRadius: 14))
+            }
+            Divider().overlay(SuzuriTheme.line)
+        }
+    }
+
+    private var exportText: String {
+        ([title] + document.blocks.map { block in
+            switch block {
+            case let .figure(_, url, caption):
+                return "![\(caption)](\(url?.absoluteString ?? ""))"
+            case let .bulletList(_, items):
+                return items.map { "- \($0.text)" }.joined(separator: "\n")
+            case let .numberedList(_, items):
+                return items.enumerated().map { "\($0.offset + 1). \($0.element.text)" }.joined(separator: "\n")
+            case let .heading(_, level, text):
+                return String(repeating: "#", count: level) + " " + text
+            case let .quote(_, text): return "> " + text
+            case let .code(_, text): return "```\n" + text + "\n```"
+            case let .link(_, text, url): return "[\(text)](\(url.absoluteString))"
+            case let .paragraph(_, text): return text
+            case .divider: return "---"
+            }
+        }).joined(separator: "\n\n")
+    }
+
+    private var usesPostimages: Bool {
+        ImageHostConfiguration.usesPostimages()
+    }
+
+    private func commitTextInput() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
+    private func requestPostimages(_ targetID: UUID?) {
+        guard isImageActionEnabled else { return }
+        commitTextInput()
+        pendingImageTarget = targetID ?? document.focusedBlockID
+        replacesPendingFigure = targetID.map { id in
+            if case .figure = document.block(for: id) { return true }
+            return false
+        } ?? false
+        isShowingPostimages = true
+    }
+
+    private func insertHostedImage(_ url: URL) {
+        guard canEdit, !isCancelled else { return }
+        if replacesPendingFigure {
+            guard let id = pendingImageTarget,
+                  case let .figure(_, _, caption) = document.block(for: id) else { return }
+            document.replaceBlock(id: id, with: .figure(id: id, imageURL: url, caption: caption))
+        } else {
+            let index = pendingImageTarget.flatMap { document.index(of: $0) }.map { $0 + 1 }
+                ?? document.blocks.count
+            document.insertBlock(.figure(id: UUID(), imageURL: url, caption: ""), at: index)
+        }
+        markChangedAndScheduleSave()
+        saveDraftNow()
+        imageProviderMessage = "图片已从 Postimages 插入"
     }
 
     private var hasContent: Bool {
@@ -330,7 +385,9 @@ struct EditorScreen: View {
     }
 
     private var canEdit: Bool {
-        guard !remoteEditUnavailable,
+        guard editorOrigin == sessionController.currentOrigin,
+              editorAccount == sessionController.accountFingerprint,
+              !remoteEditUnavailable, !hasUnsupportedContent, !isDraftCorrupt,
               currentPage?.canEdit ?? true
         else { return false }
         guard let path = editPath else { return true }
@@ -367,11 +424,11 @@ struct EditorScreen: View {
     }
 
     private var draftOrigin: String {
-        sessionController.currentOrigin
+        editorOrigin
     }
 
     private var draftAccountFingerprint: String {
-        sessionController.accountFingerprint
+        editorAccount
     }
 
     private func saveCurrentDraft() throws {
@@ -382,6 +439,11 @@ struct EditorScreen: View {
             origin: draftOrigin,
             accountFingerprint: draftAccountFingerprint
         )
+        if let path = editPath,
+           !draftStore.setPagePath(id: draftID, pagePath: path, origin: draftOrigin,
+                                   accountFingerprint: draftAccountFingerprint) {
+            throw draftStore.lastSaveError ?? DraftStore.DraftStoreError.notFound
+        }
     }
 
     private var shouldConfirmExit: Bool {
@@ -390,6 +452,8 @@ struct EditorScreen: View {
 
     private func requestDismiss() {
         guard !isPublishing, !isUploadingImage, !isPickingImage else { return }
+        commitTextInput()
+        guard saveDraftNow() else { return }
         if shouldConfirmExit {
             isShowingExitConfirmation = true
         } else {
@@ -412,17 +476,6 @@ struct EditorScreen: View {
         if isFirstChange {
             do {
                 try saveCurrentDraft()
-                if let targetPagePath {
-                    let pathSaved = draftStore.setPagePath(
-                        id: draftID,
-                        pagePath: targetPagePath,
-                        origin: draftOrigin,
-                        accountFingerprint: draftAccountFingerprint
-                    )
-                    if !pathSaved, let error = draftStore.lastSaveError {
-                        presentDraftSaveError(error)
-                    }
-                }
             } catch {
                 presentDraftSaveError(error)
             }
@@ -430,14 +483,18 @@ struct EditorScreen: View {
         scheduleDraftSaveIfNeeded()
     }
 
-    private func saveDraftNow() {
-        guard !isCancelled, !isHydrating, canEdit,
-              isUnpublishedDraft || hasUnsavedChanges
-        else { return }
+    @discardableResult
+    private func saveDraftNow() -> Bool {
+        guard !isCancelled, !isHydrating, !isDraftCorrupt, !hasUnsupportedContent,
+              isUnpublishedDraft || hasUnsavedChanges else { return !hasUnsavedChanges }
         do {
             try saveCurrentDraft()
+            isDraftSaveError = false
+            errorMessage = nil
+            return true
         } catch {
             presentDraftSaveError(error)
+            return false
         }
     }
 
@@ -471,14 +528,29 @@ struct EditorScreen: View {
             origin: draftOrigin,
             accountFingerprint: draftAccountFingerprint
         )
+        if existingDraft == nil && (expectsExistingDraft || draftStore.lastReadError != nil) {
+            isDraftCorrupt = true
+            errorMessage = "无法读取这份草稿。请返回并确认账号和本地存储状态，原始草稿未被修改。"
+            canRetryError = false
+            isHydrating = false
+            isSuppressingChanges = false
+            return
+        }
         targetPagePath = existingDraft?.pagePath ?? currentPage?.path
         isUnpublishedDraft = existingDraft.map { !$0.isPublished } ?? false
 
         if let existingDraft {
             title = existingDraft.title
-            if let savedBlocks = try? JSONDecoder().decode([Block].self, from: existingDraft.blocksData),
-               !savedBlocks.isEmpty {
+            do {
+                let savedBlocks = try JSONDecoder().decode([Block].self, from: existingDraft.blocksData)
                 document.blocks = savedBlocks
+            } catch {
+                isDraftCorrupt = true
+                errorMessage = "草稿内容无法读取，已停止自动保存以保留原始数据。"
+                canRetryError = false
+                isHydrating = false
+                isSuppressingChanges = false
+                return
             }
         }
 
@@ -603,8 +675,8 @@ struct EditorScreen: View {
             imageUploadErrorMessage = "已有图片正在上传，请稍后重试"
             return
         }
-        requestGeneration += 1
-        let generation = requestGeneration
+        imageRequestGeneration += 1
+        let generation = imageRequestGeneration
         isUploadingImage = true
         uploadingFigureID = targetID
         imageUploadErrorMessage = nil
@@ -622,10 +694,11 @@ struct EditorScreen: View {
                let configurationError = ImageHostConfiguration.configurationError() {
                 throw configurationError
             }
-            let pipeline = injectedImagePipeline
-                ?? ImagePipeline(uploadService: ImageHostConfiguration.makeUploadService())
+            let pipeline: ImagePipeline
+            if let injectedImagePipeline { pipeline = injectedImagePipeline }
+            else { pipeline = ImagePipeline(uploadService: try ImageHostConfiguration.makeUploadService()) }
             let result = try await pipeline.processAndUpload(sourceData)
-            guard !isCancelled, generation == requestGeneration else { return }
+            guard !isCancelled, generation == imageRequestGeneration else { return }
 
             if let targetID {
                 guard let current = document.block(for: targetID),
@@ -673,6 +746,7 @@ struct EditorScreen: View {
         var requestOrigin: String?
         var requestToken: String?
         do {
+            commitTextInput()
             let contentBlocks = document.blocks
             // Persist the failed publish as a local draft, but reject oversized content before
             // account creation so an invalid first publish does not create an unused account.
@@ -686,6 +760,18 @@ struct EditorScreen: View {
             try BlockEncoder.validateSize(of: nodes)
             let client = try await sessionController.ensureAccount()
             guard !isCancelled, generation == requestGeneration else { return }
+            guard editorOrigin == sessionController.currentOrigin else {
+                throw TelegraphError.api(message: "服务器已改变，请重新打开文章。")
+            }
+            let authenticatedAccount = sessionController.accountFingerprint
+            guard editorAccount == authenticatedAccount
+                    || editorAccount == TokenStore.fingerprint("anonymous") else {
+                throw TelegraphError.api(message: "账号已改变，请重新打开文章。")
+            }
+            try draftStore.adoptAnonymousDrafts(
+                origin: editorOrigin, accountFingerprint: authenticatedAccount
+            )
+            editorAccount = authenticatedAccount
             guard draftStore.adoptScope(
                 id: draftID,
                 origin: draftOrigin,
@@ -765,8 +851,8 @@ struct EditorScreen: View {
                 imageProviderMessage = "文章已发布，但本地草稿保存失败"
             }
 
-            isUnpublishedDraft = false
-            hasUnsavedChanges = false
+            isUnpublishedDraft = localPublishPersistenceFailed
+            hasUnsavedChanges = localPublishPersistenceFailed
             withAnimation(AppAnimation.listInsert) {
                 publishedURL = url
             }

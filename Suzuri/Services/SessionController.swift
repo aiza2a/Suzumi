@@ -20,6 +20,8 @@ final class SessionController {
     private var accountTask: Task<APIClient, Error>?
     @ObservationIgnored
     private var accountTaskID: UUID?
+    @ObservationIgnored
+    private var credentialGeneration = UUID()
 
     private(set) var accessToken: String?
     private(set) var shortName: String?
@@ -77,18 +79,21 @@ final class SessionController {
 
         let requestOrigin = activeOrigin
         let requestToken = accessToken
+        let requestGeneration = credentialGeneration
         do {
             let client = try validatedClient()
             let account = try await AccountService(client: client).getAccountInfo()
             guard requestOrigin == activeOrigin,
                   requestOrigin == currentOrigin,
+                  requestGeneration == credentialGeneration,
                   requestToken == accessToken
             else { return }
-            apply(account, origin: requestOrigin)
+            try apply(account, origin: requestOrigin)
             isLoaded = true
         } catch {
             guard requestOrigin == activeOrigin,
                   requestOrigin == currentOrigin,
+                  requestGeneration == credentialGeneration,
                   requestToken == accessToken
             else { return }
             let normalized = normalize(error)
@@ -138,6 +143,7 @@ final class SessionController {
         }
 
         let origin = activeOrigin
+        let generation = credentialGeneration
         let registrationClient = try validatedClient()
         let taskID = UUID()
         let task = Task { @MainActor [weak self] () throws -> APIClient in
@@ -147,16 +153,19 @@ final class SessionController {
 
             let account = try await AccountService(client: registrationClient).createAccount()
             guard self.activeOrigin == origin,
-                  self.currentOrigin == origin else {
+                  self.currentOrigin == origin,
+                  self.credentialGeneration == generation,
+                  !Task.isCancelled else {
                 throw TelegraphError.network(underlying: "server configuration changed")
             }
             guard let token = account.accessToken, !token.isEmpty else {
                 throw TelegraphError.missingToken
             }
 
+            try self.apply(account, origin: origin)
             try self.tokenStore.saveString(token, for: .accessToken, origin: origin)
             self.accessToken = token
-            self.apply(account, origin: origin)
+            self.credentialGeneration = UUID()
             self.isLoaded = true
             return self.makeClientWithoutSynchronization()
         }
@@ -188,7 +197,7 @@ final class SessionController {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedURL = url?.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedName.isEmpty {
-            tokenStore.delete(Self.authorNameKey)
+            try tokenStore.saveString("", for: Self.authorNameKey)
             authorName = nil
         } else {
             try tokenStore.saveString(trimmedName, for: Self.authorNameKey)
@@ -199,13 +208,17 @@ final class SessionController {
             try tokenStore.saveString(trimmedURL, for: Self.authorURLKey)
             authorURL = trimmedURL
         } else {
-            tokenStore.delete(Self.authorURLKey)
+            try tokenStore.saveString("", for: Self.authorURLKey)
             authorURL = nil
         }
     }
 
     /// 撤销当前 token；成功后清除本地身份，下次发布会重新注册。
     func revokeAccess() async throws {
+        synchronizeOrigin()
+        let origin = activeOrigin
+        let token = accessToken
+        let generation = credentialGeneration
         if accessToken != nil {
             do {
                 _ = try await validatedClient().call(
@@ -214,11 +227,50 @@ final class SessionController {
                     as: TelegraphAccount.self
                 )
             } catch {
-                handleAuthenticationFailure(error)
+                if isCurrentRequest(origin: origin, token: token, generation: generation) {
+                    handleAuthenticationFailure(error)
+                }
                 throw error
             }
         }
+        guard isCurrentRequest(origin: origin, token: token, generation: generation) else { return }
         clearLocalAccess()
+    }
+
+    /// Import an existing API token; a Telegram login URL is not an API credential.
+    /// Validation is sent only to the explicitly selected HTTPS API origin.
+    func importAccessToken(_ value: String) async throws {
+        synchronizeOrigin()
+        let token = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty, token.utf8.count <= 512,
+              token.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) || "_-".unicodeScalars.contains($0) })
+        else { throw TelegraphError.api(message: "请输入有效的 Telegraph access_token，不要粘贴登录链接。") }
+        if let error = serverManager.configurationError { throw error }
+        guard let baseURL = serverManager.apiURL, baseURL.scheme?.lowercased() == "https" else {
+            throw TelegraphError.api(message: "导入账号需要 HTTPS API 地址。")
+        }
+        accountTask?.cancel()
+        accountTask = nil
+        accountTaskID = nil
+        credentialGeneration = UUID()
+        let generation = credentialGeneration
+        let origin = activeOrigin
+        let previousToken = accessToken
+        let client = APIClient(baseURL: baseURL, session: session, accessToken: token)
+        let account = try await AccountService(client: client).getAccountInfo()
+        guard isCurrentRequest(origin: origin, token: previousToken, generation: generation), !Task.isCancelled else {
+            throw TelegraphError.api(message: "账号或服务器已改变，请重新导入。")
+        }
+        try apply(account, origin: origin)
+        try tokenStore.saveString(token, for: .accessToken, origin: origin)
+        accessToken = token
+        credentialGeneration = UUID()
+        isLoaded = true
+        loadError = nil
+    }
+
+    private func isCurrentRequest(origin: String, token: String?, generation: UUID) -> Bool {
+        origin == activeOrigin && origin == currentOrigin && token == accessToken && generation == credentialGeneration
     }
 
     /// Clears credentials after an explicit authentication failure.
@@ -251,8 +303,11 @@ final class SessionController {
         accountTask = nil
         accountTaskID = nil
         activeOrigin = origin
+        credentialGeneration = UUID()
         accessToken = tokenStore.loadString(.accessToken, origin: origin)
         shortName = tokenStore.loadString(.shortName, origin: origin)
+        authorName = tokenStore.loadString(Self.authorNameKey)
+        authorURL = tokenStore.loadString(Self.authorURLKey)
         isLoaded = false
         loadError = nil
     }
@@ -262,22 +317,24 @@ final class SessionController {
         return APIClient(baseURL: baseURL, session: session, accessToken: accessToken)
     }
 
-    private func apply(_ account: TelegraphAccount, origin: String) {
+    private func apply(_ account: TelegraphAccount, origin: String) throws {
         if let shortName = account.shortName, !shortName.isEmpty {
+            try tokenStore.saveString(shortName, for: .shortName, origin: origin)
             self.shortName = shortName
-            try? tokenStore.saveString(shortName, for: .shortName, origin: origin)
         }
-        if let authorName = account.authorName {
+        if tokenStore.loadString(Self.authorNameKey) == nil, let authorName = account.authorName {
             self.authorName = authorName
-            try? tokenStore.saveString(authorName, for: Self.authorNameKey)
         }
-        if let authorUrl = account.authorUrl {
+        if tokenStore.loadString(Self.authorURLKey) == nil, let authorUrl = account.authorUrl {
             self.authorURL = authorUrl
-            try? tokenStore.saveString(authorUrl, for: Self.authorURLKey)
         }
     }
 
     private func clearLocalAccess() {
+        credentialGeneration = UUID()
+        accountTask?.cancel()
+        accountTask = nil
+        accountTaskID = nil
         tokenStore.delete(.accessToken, origin: activeOrigin)
         tokenStore.delete(.shortName, origin: activeOrigin)
         accessToken = nil

@@ -71,6 +71,8 @@ final class ServerManager {
         guard let url = URL(string: apiBase),
               let scheme = url.scheme?.lowercased(),
               let host = url.host?.lowercased(),
+              url.user == nil, url.password == nil,
+              url.query == nil, url.fragment == nil,
               scheme == "https"
                 || (scheme == "http" && (host == "localhost" || host == "127.0.0.1"))
         else { return nil }
