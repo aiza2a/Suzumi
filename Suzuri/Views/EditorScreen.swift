@@ -105,16 +105,16 @@ struct EditorScreen: View {
             isEditable: canEdit && !isHydrating && !isPublishing,
             isImageActionEnabled: isImageActionEnabled,
             uploadingFigureID: uploadingFigureID,
-            onImageData: { data, targetID in
+            onImageData: { (data: Data, targetID: BlockID?) in
                 Task { @MainActor in await uploadImage(data, intoFigure: targetID) }
             },
-            onImageError: { error, targetID in
+            onImageError: { (error: Error, targetID: BlockID?) in
                 imageUploadErrorMessage = ErrorPresenter.message(for: error)
                 retryImageData = nil
                 retryFigureID = targetID
             },
-            onImagePickerLoadingChanged: { isPickingImage = $0 },
-            onRequestImage: usesPostimages ? requestPostimages : nil,
+            onImagePickerLoadingChanged: { (isLoading: Bool) in isPickingImage = isLoading },
+            onRequestImage: usesPostimages ? { (targetID: BlockID?) in requestPostimages(targetID) } : nil,
             header: AnyView(documentHeader)
         )
         .environment(document)
