@@ -96,7 +96,7 @@ struct EditorScreen: View {
         )
     }
 
-    var body: some View {
+    private var editorCanvas: some View {
         BlockEditorView(
             isEditable: canEdit && !isHydrating && !isPublishing,
             isImageActionEnabled: isImageActionEnabled,
@@ -115,6 +115,10 @@ struct EditorScreen: View {
         )
         .environment(document)
         .background(SuzuriTheme.paper)
+    }
+
+    private var navigationContent: some View {
+        editorCanvas
         .navigationTitle(currentPage == nil ? "新文章" : "编辑文章")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
@@ -159,6 +163,10 @@ struct EditorScreen: View {
                 .accessibilityLabel("发布")
             }
         }
+    }
+
+    private var observedEditor: some View {
+        navigationContent
         .sheet(isPresented: $isShowingPostimages) {
             PostimagesUploadView { url in insertHostedImage(url) }
         }
@@ -206,6 +214,10 @@ struct EditorScreen: View {
             requestGeneration += 1
             imageRequestGeneration += 1
         }
+    }
+
+    private var imageAlerts: some View {
+        observedEditor
         .alert("图片上传失败", isPresented: Binding(
             get: { imageUploadErrorMessage != nil },
             set: {
@@ -233,6 +245,10 @@ struct EditorScreen: View {
         } message: {
             Text(imageUploadErrorMessage ?? "")
         }
+    }
+
+    private var requestAlerts: some View {
+        imageAlerts
         .alert(
             isPageLoadError ? "加载失败" : (isDraftSaveError ? "草稿保存失败" : "发布失败"),
             isPresented: Binding(
@@ -264,6 +280,10 @@ struct EditorScreen: View {
         } message: {
             Text(errorMessage ?? "")
         }
+    }
+
+    var body: some View {
+        requestAlerts
         .alert("有未发布草稿，确定退出？", isPresented: $isShowingExitConfirmation) {
             Button("退出", role: .destructive) {
                 if saveDraftNow() { dismiss() }
@@ -798,7 +818,7 @@ struct EditorScreen: View {
                     path: path,
                     title: title,
                     authorName: optionalValue(authorName),
-                    authorUrl: sessionController.authorURL ?? currentPage?.authorUrl,
+                    authorUrl: currentPage?.authorUrl,
                     content: nodes
                 )
                 guard generation == requestGeneration,
