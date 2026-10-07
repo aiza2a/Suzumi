@@ -114,7 +114,7 @@ struct EditorScreen: View {
             header: AnyView(documentHeader)
         )
         .environment(document)
-        .background { SuzuriTheme.paper.ignoresSafeArea() }
+        .background { Rectangle().fill(SuzuriTheme.paper).ignoresSafeArea() }
     }
 
     private var navigationContent: some View {
