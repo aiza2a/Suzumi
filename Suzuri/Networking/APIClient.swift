@@ -3,8 +3,7 @@ import Foundation
 /// Telegraph API 统一客户端。
 ///
 /// 参考实现依据：
-/// - token 注入方式对齐 `telegraph-android/AuthInterceptor.kt`：access_token 作为
-///   query 参数追加（非 header）。
+/// - token 注入方式对齐 `telegraph-android/AuthInterceptor.kt`：access_token 作为 query 参数追加（非 header）。
 /// - 方法路径对齐 `telegraph-android/RestApi.kt` 的端点（createAccount/createPage 等）。
 /// - 信封解析对齐 `dp5a/Telegraph` 的 `Response<T>` / `unwrapResponse`。
 struct APIClient: Sendable {
@@ -15,17 +14,12 @@ struct APIClient: Sendable {
     var accessToken: String?
 
     /// 所有方法统一走此入口。GET 参数进入 query，写入接口使用表单 body。
-    /// - parameters:
-    ///   - method: Telegraph 方法名，如 "createAccount" / "createPage"。
-    ///   - params: 业务参数（不含 access_token，由本方法注入）。
-    ///   - type: 期望的 result 类型。
-    ///   - httpMethod: 请求方法；读取接口使用 GET，写入接口默认 POST。
-    /// - returns: 信封内 `result`。
-    /// - throws: `TelegraphError`（api / invalidResponse / network）。
-    func call<T: Decodable & Sendable>(_ method: String,
-                            params: [String: String],
-                            as type: T.Type,
-                            httpMethod: String = "POST") async throws -> T {
+    /// token 仍作为 query 参数注入。
+    func makeRequest(
+        _ method: String,
+        params: [String: String],
+        httpMethod: String = "POST"
+    ) throws -> URLRequest {
         guard var comps = URLComponents(
             url: baseURL.appendingPathComponent(method),
             resolvingAgainstBaseURL: false
@@ -58,6 +52,17 @@ struct APIClient: Sendable {
             )
             request.httpBody = try formEncoded(params)
         }
+        return request
+    }
+
+    /// 发送请求并解包 Telegraph envelope。
+    func call<T: Decodable & Sendable>(
+        _ method: String,
+        params: [String: String],
+        as type: T.Type,
+        httpMethod: String = "POST"
+    ) async throws -> T {
+        let request = try makeRequest(method, params: params, httpMethod: httpMethod)
 
         let data: Data
         let response: URLResponse

@@ -190,13 +190,14 @@ final class ImageHostingTests: XCTestCase {
         XCTAssertEqual(authorization, "Basic YWxpY2U6c2VjcmV0")
     }
 
-    func testMultipartUsesFileFieldAndRandomBoundary() async throws {
-        ImageHostingMockURLProtocol.data = Data(#"[{"src":"/file/a.png"}]"#.utf8)
-        let host = TelegraphCompatHost(session: makeSession())
+    func testMultipartUsesFileFieldAndRandomBoundary() throws {
+        let host = TelegraphCompatHost()
+        let request = try host.makeUploadRequest(
+            Data("payload".utf8),
+            filename: "a.png",
+            mimeType: "image/png"
+        )
 
-        _ = try await host.upload(Data("payload".utf8), filename: "a.png", mimeType: "image/png")
-
-        let request = try XCTUnwrap(ImageHostingMockURLProtocol.lastRequest)
         let contentType = try XCTUnwrap(request.value(forHTTPHeaderField: "Content-Type"))
         let boundaryPrefix = "multipart/form-data; boundary="
         XCTAssertTrue(contentType.hasPrefix(boundaryPrefix))

@@ -112,16 +112,11 @@ final class APIClientTests: XCTestCase {
     }
 
     /// POST 业务参数进入 form body，token 仍作为 query 参数。
-    func testPostParametersUseFormEncodedBody() async throws {
-        MockURLProtocol.data = Data(#"{"ok":true,"result":{"short_name":"u1"}}"#.utf8)
-        let client = makeClient()
-        _ = try await client.call(
+    func testPostParametersUseFormEncodedBody() throws {
+        let request = try makeClient().makeRequest(
             "createAccount",
-            params: ["short_name": "a b&c"],
-            as: TelegraphAccount.self
+            params: ["short_name": "a b&c"]
         )
-
-        let request = try XCTUnwrap(MockURLProtocol.lastRequest)
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(
             request.value(forHTTPHeaderField: "Content-Type"),

@@ -76,6 +76,9 @@ final class PageServiceTests: XCTestCase {
         }
         return nil
     }
+    private func formValue(_ name: String, from parameters: [String: String]) -> String? {
+        parameters[name]
+    }
 
     override func setUp() {
         super.setUp()
@@ -139,8 +142,9 @@ final class PageServiceTests: XCTestCase {
     func testEditPageSendsContentAndReturnsPage() async throws {
         PageServiceMockURLProtocol.data = Data(#"{"ok":true,"result":PLACEHOLDER}"#.replacingOccurrences(of: "PLACEHOLDER", with: pageJSON).utf8)
         let node = TelegraphNode(tag: "p", attrs: nil, children: [.text("更新")])
+        let service = makeService()
 
-        let page = try await makeService().editPage(
+        let page = try await service.editPage(
             path: "demo-page",
             title: "新标题",
             authorName: "作者",
@@ -153,17 +157,19 @@ final class PageServiceTests: XCTestCase {
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(request.url?.path, "/editPage/demo-page")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-www-form-urlencoded; charset=utf-8")
-        XCTAssertEqual(formValue("title", from: request), "新标题")
-        XCTAssertEqual(formValue("author_name", from: request), "作者")
-        XCTAssertTrue(formValue("content", from: request)?.contains("更新") == true)
+        let body = try service.parameters(title: "新标题", authorName: "作者", authorUrl: nil, content: [node])
+        XCTAssertEqual(formValue("title", from: body), "新标题")
+        XCTAssertEqual(formValue("author_name", from: body), "作者")
+        XCTAssertTrue(formValue("content", from: body)?.contains("更新") == true)
         let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
         XCTAssertEqual(query?.first(where: { $0.name == "access_token" })?.value, "token")
     }
 
     func testCreatePageReturnsPage() async throws {
         PageServiceMockURLProtocol.data = Data(#"{"ok":true,"result":PLACEHOLDER}"#.replacingOccurrences(of: "PLACEHOLDER", with: pageJSON).utf8)
+        let service = makeService()
 
-        let page = try await makeService().createPage(
+        let page = try await service.createPage(
             title: "标题",
             authorName: nil,
             authorUrl: nil,
@@ -173,27 +179,25 @@ final class PageServiceTests: XCTestCase {
         XCTAssertEqual(page.url, "https://telegra.ph/demo-page")
         let request = try XCTUnwrap(PageServiceMockURLProtocol.lastRequest)
         XCTAssertEqual(request.httpMethod, "POST")
-        XCTAssertEqual(formValue("title", from: request), "标题")
-        XCTAssertEqual(formValue("return_content", from: request), "true")
+        let body = try service.parameters(title: "标题", authorName: nil, authorUrl: nil, content: [])
+        XCTAssertEqual(formValue("title", from: body), "标题")
+        XCTAssertEqual(formValue("return_content", from: body), "true")
         XCTAssertEqual(request.url?.path, "/createPage")
     }
 
-    func testBlockCreateOverloadDropsEmptyBlocksBeforeEncoding() async throws {
-        PageServiceMockURLProtocol.data = Data(#"{"ok":true,"result":PLACEHOLDER}"#.replacingOccurrences(of: "PLACEHOLDER", with: pageJSON).utf8)
+    func testBlockCreateOverloadDropsEmptyBlocksBeforeEncoding() throws {
         let blocks: [Block] = [
             .emptyParagraph(),
             .paragraph(id: UUID(), text: "保留正文")
         ]
-
-        _ = try await makeService().createPage(
+        let body = try makeService().parameters(
             title: "标题",
             authorName: nil,
             authorUrl: nil,
             blocks: blocks
         )
 
-        let request = try XCTUnwrap(PageServiceMockURLProtocol.lastRequest)
-        let content = try XCTUnwrap(formValue("content", from: request))
+        let content = try XCTUnwrap(formValue("content", from: body))
         let nodes = try JSONDecoder().decode([TelegraphNode].self, from: Data(content.utf8))
         XCTAssertEqual(nodes.count, 1)
         XCTAssertEqual(nodes.first?.tag, "p")

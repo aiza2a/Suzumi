@@ -36,14 +36,13 @@ struct PageService: Sendable {
         authorUrl: String?,
         content: [TelegraphNode]
     ) async throws -> Page {
-        let contentData = try encodedContent(content)
         return try await client.call(
             "editPage/\(path)",
-            params: parameters(
+            params: try parameters(
                 title: title,
                 authorName: authorName,
                 authorUrl: authorUrl,
-                contentData: contentData
+                content: content
             ),
             as: Page.self
         )
@@ -56,14 +55,13 @@ struct PageService: Sendable {
         authorUrl: String?,
         content: [TelegraphNode]
     ) async throws -> Page {
-        let contentData = try encodedContent(content)
         return try await client.call(
             "createPage",
-            params: parameters(
+            params: try parameters(
                 title: title,
                 authorName: authorName,
                 authorUrl: authorUrl,
-                contentData: contentData
+                content: content
             ),
             as: Page.self
         )
@@ -77,15 +75,13 @@ struct PageService: Sendable {
         authorUrl: String?,
         blocks: [Block]
     ) async throws -> Page {
-        let nodes = BlockEncoder.nodesForPublishing(blocks)
-        let contentData = try encodedContent(nodes)
         return try await client.call(
             "editPage/\(path)",
-            params: parameters(
+            params: try parameters(
                 title: title,
                 authorName: authorName,
                 authorUrl: authorUrl,
-                contentData: contentData
+                blocks: blocks
             ),
             as: Page.self
         )
@@ -98,17 +94,48 @@ struct PageService: Sendable {
         authorUrl: String?,
         blocks: [Block]
     ) async throws -> Page {
-        let nodes = BlockEncoder.nodesForPublishing(blocks)
-        let contentData = try encodedContent(nodes)
         return try await client.call(
             "createPage",
-            params: parameters(
+            params: try parameters(
                 title: title,
                 authorName: authorName,
                 authorUrl: authorUrl,
-                contentData: contentData
+                blocks: blocks
             ),
             as: Page.self
+        )
+    }
+
+    /// Builds publish fields from Telegraph nodes; internal for focused unit tests.
+    func parameters(
+        title: String,
+        authorName: String?,
+        authorUrl: String?,
+        content: [TelegraphNode]
+    ) throws -> [String: String] {
+        let contentData = try encodedContent(content)
+        return parameters(
+            title: title,
+            authorName: authorName,
+            authorUrl: authorUrl,
+            contentData: contentData
+        )
+    }
+
+    /// Builds publish fields from editable blocks; internal for focused unit tests.
+    func parameters(
+        title: String,
+        authorName: String?,
+        authorUrl: String?,
+        blocks: [Block]
+    ) throws -> [String: String] {
+        let nodes = BlockEncoder.nodesForPublishing(blocks)
+        let contentData = try encodedContent(nodes)
+        return parameters(
+            title: title,
+            authorName: authorName,
+            authorUrl: authorUrl,
+            contentData: contentData
         )
     }
 

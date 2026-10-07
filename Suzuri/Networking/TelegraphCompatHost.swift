@@ -20,22 +20,7 @@ struct TelegraphCompatHost: ImageHosting {
     }
 
     func upload(_ data: Data, filename: String, mimeType: String) async throws -> URL {
-        // Basic Auth must never be sent to an unencrypted endpoint.
-        guard baseURL.scheme?.lowercased() == "https" else {
-            throw HostError.badResponse
-        }
-        let boundary = makeMultipartBoundary()
-        var request = URLRequest(url: baseURL.appendingPathComponent("upload"))
-        request.httpMethod = "POST"
-        request.setValue("multipart/form-data; boundary=\(boundary)",
-                         forHTTPHeaderField: "Content-Type")
-        if let basicAuth {
-            let credentials = "\(basicAuth.user):\(basicAuth.pass)"
-            let encodedCredentials = Data(credentials.utf8).base64EncodedString()
-            request.setValue("Basic \(encodedCredentials)", forHTTPHeaderField: "Authorization")
-        }
-        request.httpBody = makeMultipartBody(data: data, filename: filename,
-                                              mimeType: mimeType, boundary: boundary)
+        let request = try makeUploadRequest(data, filename: filename, mimeType: mimeType)
 
         do {
             let (data, response) = try await session.data(for: request)
@@ -62,6 +47,30 @@ struct TelegraphCompatHost: ImageHosting {
         } catch {
             throw HostError.transport
         }
+    }
+
+    /// Constructs the multipart request independently of URLSession body streaming.
+    func makeUploadRequest(
+        _ data: Data,
+        filename: String,
+        mimeType: String
+    ) throws -> URLRequest {
+        guard baseURL.scheme?.lowercased() == "https" else {
+            throw HostError.badResponse
+        }
+        let boundary = makeMultipartBoundary()
+        var request = URLRequest(url: baseURL.appendingPathComponent("upload"))
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)",
+                         forHTTPHeaderField: "Content-Type")
+        if let basicAuth {
+            let credentials = "\(basicAuth.user):\(basicAuth.pass)"
+            let encodedCredentials = Data(credentials.utf8).base64EncodedString()
+            request.setValue("Basic \(encodedCredentials)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = makeMultipartBody(data: data, filename: filename,
+                                             mimeType: mimeType, boundary: boundary)
+        return request
     }
 
     private func resolvedURL(for source: String) -> URL? {

@@ -70,7 +70,6 @@ jobs:
             -parallel-testing-enabled NO \
             -derivedDataPath build/DerivedData \
             -resultBundlePath build/Suzuri-tests.xcresult \
-            CODE_SIGNING_ALLOWED=NO \
             | tee build/tests.log
       - name: Upload test diagnostics
         if: always()
