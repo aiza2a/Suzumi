@@ -12,7 +12,7 @@ private final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        Self.lastRequest = request
+        Self.lastRequest = URLRequestTestSupport.materializedBody(request)
         if let error = Self.error {
             client?.urlProtocol(self, didFailWithError: error)
             return
