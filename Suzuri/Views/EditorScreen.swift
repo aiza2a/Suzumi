@@ -97,6 +97,10 @@ struct EditorScreen: View {
     }
 
     private var editorCanvas: some View {
+        ZStack(alignment: .top) {
+            Rectangle()
+                .fill(SuzuriTheme.paper)
+                .ignoresSafeArea()
         BlockEditorView(
             isEditable: canEdit && !isHydrating && !isPublishing,
             isImageActionEnabled: isImageActionEnabled,
@@ -114,7 +118,7 @@ struct EditorScreen: View {
             header: AnyView(documentHeader)
         )
         .environment(document)
-        .background { Rectangle().fill(SuzuriTheme.paper).ignoresSafeArea() }
+        }
     }
 
     private var navigationContent: some View {
